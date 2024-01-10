@@ -63,7 +63,7 @@ def threshold_magic_widget(
 
 
 # if we want even more control over our widget, we can use
-# magicgui `Container`
+# magicgui `Container` napari.Viewer
 class ImageThreshold(Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
