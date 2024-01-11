@@ -30,6 +30,7 @@ Replace code below according to your needs.
 """
 from typing import TYPE_CHECKING
 
+import magicgui.widgets as widgets
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
@@ -109,6 +110,62 @@ class ImageThreshold(Container):
             self._viewer.layers[name].data = thresholded
         else:
             self._viewer.add_labels(thresholded, name=name)
+
+
+class IoContainer(Container):
+    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
+        super().__init__()
+        self._viewer = viewer
+        # Image
+        self._image_reader = widgets.FileEdit(label="Image path")
+        self._image_reader.changed.connect(self._read_image)
+        # Label
+        self._label_reader = widgets.FileEdit(label="Label path")
+        self._label_reader.changed.connect(self._read_label)
+
+        self._crop_checkbox = widgets.CheckBox(text="Crop image")
+        self._crop_checkbox.changed.connect(self._crop_image)
+
+        self.extend(
+            [
+                self._image_reader,
+                self._label_reader,
+                self._crop_checkbox,
+            ]
+        )
+
+    def _read_image(self):
+        if "Image" in self._viewer.layers:
+            self._viewer.layers.remove("Image")
+        self._viewer.open(
+            self._image_reader.value,
+            plugin="napari-itk-io",
+            layer_type="image",
+            name="Image",
+        )
+
+        # Update of the layer stack
+        self._crop_checkbox.value = False
+        if "Label" in self._viewer.layers:
+            self._viewer.layers.move("Label", -1)
+
+    def _read_label(self):
+        if "Label" in self._viewer.layers:
+            self._viewer.layers.remove("Label")
+        self._viewer.open(
+            self._label_reader.value,
+            plugin="napari-itk-io",
+            layer_type="labels",
+            name="Label",
+            visible=True,
+        )
+
+        self._viewer.layers["Label"].editable = False
+        # Update of the layer stack
+        self._crop_checkbox.value = False
+
+    def _crop_image(self):
+        pass
 
 
 class ExampleQWidget(QWidget):

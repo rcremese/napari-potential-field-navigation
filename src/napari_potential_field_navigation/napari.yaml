@@ -30,6 +30,9 @@ contributions:
     - id: napari-potential-field-navigation.make_qwidget
       python_name: napari_potential_field_navigation:ExampleQWidget
       title: Make example QWidget
+    - id: napari-potential-field-navigation.io_widget
+      python_name: napari_potential_field_navigation:IoContainer
+      title: Read image and label datas
   readers:
     - command: napari-potential-field-navigation.get_reader
       accepts_directories: false
@@ -55,3 +58,5 @@ contributions:
       display_name: Autogenerate Threshold
     - command: napari-potential-field-navigation.make_qwidget
       display_name: Example QWidget
+    - command: napari-potential-field-navigation.io_widget
+      display_name: Read inputs
