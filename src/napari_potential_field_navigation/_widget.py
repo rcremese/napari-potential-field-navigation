@@ -31,6 +31,7 @@ Replace code below according to your needs.
 from typing import TYPE_CHECKING
 
 import magicgui.widgets as widgets
+import napari.utils.notifications as notifications
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
@@ -113,24 +114,37 @@ class ImageThreshold(Container):
 
 
 class IoContainer(Container):
+    """Contains all informations about the input datas"""
+
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         super().__init__()
         self._viewer = viewer
         # Image
         self._image_reader = widgets.FileEdit(label="Image path")
         self._image_reader.changed.connect(self._read_image)
+
         # Label
         self._label_reader = widgets.FileEdit(label="Label path")
         self._label_reader.changed.connect(self._read_label)
 
-        self._crop_checkbox = widgets.CheckBox(text="Crop image")
+        self._crop_checkbox = widgets.CheckBox(
+            text="Crop image",
+            tooltip="Crop the image and the labels to a bounding box containing all labels > 0. Helps reduce the computation time.",
+        )
         self._crop_checkbox.changed.connect(self._crop_image)
+        self._lock_checkbox = widgets.CheckBox(text="Lock")
+        self._lock_checkbox.changed.connect(self._lock)
 
+        self._checkbox_container = widgets.Container(
+            widgets=[self._crop_checkbox, self._lock_checkbox],
+            layout="horizontal",
+        )
         self.extend(
             [
+                widgets.Label(label="Data selection"),
                 self._image_reader,
                 self._label_reader,
-                self._crop_checkbox,
+                self._checkbox_container,
             ]
         )
 
@@ -147,25 +161,244 @@ class IoContainer(Container):
         # Update of the layer stack
         self._crop_checkbox.value = False
         if "Label" in self._viewer.layers:
-            self._viewer.layers.move("Label", -1)
+            idx = self._viewer.layers.index("Label")
+            self._viewer.layers.move(idx, -1)
 
     def _read_label(self):
         if "Label" in self._viewer.layers:
             self._viewer.layers.remove("Label")
-        self._viewer.open(
+        labels = self._viewer.open(
             self._label_reader.value,
             plugin="napari-itk-io",
-            layer_type="labels",
-            name="Label",
-            visible=True,
+            layer_type="image",
+            name="Label_temp",
+            visible=False,
         )
+        for label in labels:
+            data = label.data.astype(int)
+            self._viewer.add_labels(
+                data,
+                scale=label.scale,
+                metadata=label.metadata,
+                translate=label.translate,
+                name="Label",
+                visible=True,
+            )
+            self._viewer.layers.remove(label)
 
         self._viewer.layers["Label"].editable = False
         # Update of the layer stack
         self._crop_checkbox.value = False
 
     def _crop_image(self):
-        pass
+        self._data_dict = {}
+
+    def _lock(self):
+        notifications.show_info(
+            "The image locking procedure is not yet available."
+        )
+        raise NotImplementedError
+
+
+class PointContainer(Container):
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__()
+        self._viewer = viewer
+        self._source_selection = widgets.PushButton(text="Select goal")
+        self._source_selection.changed.connect(self._select_source)
+
+        self._positions_selection = widgets.PushButton(text="Select positions")
+        self._positions_selection.changed.connect(self._select_positions)
+
+        self._selection_container = widgets.Container(
+            widgets=[self._source_selection, self._positions_selection],
+            layout="horizontal",
+        )
+        self._agent_count = widgets.SpinBox(
+            label="Number of agents", min=1, max=100, value=1
+        )
+
+        self.extend(
+            [
+                widgets.Label(label="Point cloud selection"),
+                self._selection_container,
+                self._agent_count,
+            ]
+        )
+
+    def _select_source(self):
+        print("Select source")
+        raise NotImplementedError
+
+    def _select_positions(self):
+        print("Select positions")
+        raise NotImplementedError
+
+    @property
+    def nb_agents(self) -> int:
+        return self._agent_count.value
+
+
+class ApfContainer(Container):
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__(layout="horizontal")
+        self._viewer = viewer
+        self._attractive_weight_slider = widgets.FloatSlider(
+            min=1,
+            max=1000,
+            step=1,
+            value=1,
+            label="Attractive weight (unit)",
+        )
+        self._attractive_weight_slider.changed.connect(self._update_apf)
+        self._repulsive_weight_slider = widgets.FloatSlider(
+            min=1,
+            max=1000,
+            step=1,
+            value=1,
+            label="Repulsive weight (unit)",
+        )
+        self._repulsive_weight_slider.changed.connect(self._update_apf)
+        self._repulsive_radius_slider = widgets.FloatSlider(
+            min=0.1, max=100, value=1, label="Repulsive radius (cm)"
+        )
+        self._repulsive_radius_slider.changed.connect(self._update_radius)
+        self._weight_container = widgets.Container(
+            widgets=[
+                widgets.Label(label="APF parameters"),
+                self._attractive_weight_slider,
+                self._repulsive_weight_slider,
+                self._repulsive_radius_slider,
+            ],
+            layout="vertical",
+        )
+        self._show_apf_box = widgets.CheckBox(text="Show APF")
+        self._show_apf_box.changed.connect(self._show_apf)
+
+        self.extend(
+            [
+                self._weight_container,
+                self._show_apf_box,
+            ]
+        )
+
+    def _update_radius(self):
+        raise NotImplementedError
+
+    def _update_apf(self):
+        raise NotImplementedError
+
+    def _show_apf(self):
+        raise NotImplementedError
+
+
+class SimulationContainer(Container):
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__()
+        self._viewer = viewer
+        self._time_slider = widgets.FloatLogSlider(
+            min=0.1,
+            max=1000,
+            value=10,
+            base=10,
+            label="Simulation final time (s)",
+        )
+        self._timestep_slider = widgets.FloatSlider(
+            min=0.01,
+            max=1,
+            value=1,
+            step=0.01,
+            label="Simulation time step (s)",
+        )
+        self._speed_slider = widgets.FloatSlider(
+            min=0.1,
+            max=10,
+            value=1,
+            step=0.1,
+            label="Maximal speed (cm/s)",
+        )
+        self._start_button = widgets.PushButton(text="Start simulation")
+        self._start_button.changed.connect(self._start_simulation)
+
+        self._sliders_container = widgets.Container(
+            widgets=[
+                widgets.Label(label="Simulation parameters"),
+                self._time_slider,
+                self._timestep_slider,
+                self._speed_slider,
+            ],
+        )
+        self._sliders_container.changed.connect(self._update_simulation)
+        self._simulation_container = widgets.Container(
+            widgets=[self._sliders_container, self._start_button],
+            layout="horizontal",
+        )
+        ## Optimization widgets
+        self._nb_epochs_box = widgets.SpinBox(
+            label="Epochs", min=1, max=1000, step=10, value=100
+        )
+        self._lr_slider = widgets.FloatSpinBox(
+            min=0.001, max=10, value=0.1, label="Learning rate"
+        )
+        self._run_optimization_button = widgets.PushButton(
+            text="Run optimization"
+        )
+        self._run_optimization_button.changed.connect(self._run_optimization)
+        self._optimization_container = Container(
+            widgets=[
+                widgets.Container(
+                    widgets=[
+                        widgets.Label(label="Optimization parameters"),
+                        self._nb_epochs_box,
+                        self._lr_slider,
+                    ]
+                ),
+                self._run_optimization_button,
+            ],
+            layout="horizontal",
+        )
+        self.extend(
+            [
+                self._simulation_container,
+                self._optimization_container,
+            ]
+        )
+
+    def _update_simulation(self):
+        print("New values to the simulation !")
+        raise NotImplementedError
+
+    def _start_simulation(self):
+        raise NotImplementedError
+
+    def _run_optimization(self):
+        raise NotImplementedError
+
+
+class DiffApfWidget(Container):
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__()
+        self._viewer = viewer
+        self._io_container = IoContainer(self._viewer)
+        self._point_container = PointContainer(self._viewer)
+        self._apf_container = ApfContainer(self._viewer)
+        self._simulation_container = SimulationContainer(self._viewer)
+        self.extend(
+            [
+                self._io_container,
+                self._point_container,
+                self._apf_container,
+                self._simulation_container,
+            ]
+        )
+
+    @property
+    def io_container(self) -> IoContainer:
+        return self._io_container
+
+    @property
+    def point_container(self) -> PointContainer:
+        return self._point_container
 
 
 class ExampleQWidget(QWidget):

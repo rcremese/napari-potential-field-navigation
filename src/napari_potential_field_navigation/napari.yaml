@@ -30,9 +30,9 @@ contributions:
     - id: napari-potential-field-navigation.make_qwidget
       python_name: napari_potential_field_navigation:ExampleQWidget
       title: Make example QWidget
-    - id: napari-potential-field-navigation.io_widget
-      python_name: napari_potential_field_navigation:IoContainer
-      title: Read image and label datas
+    - id: napari-potential-field-navigation.make_diff_apf_widget
+      python_name: napari_potential_field_navigation:DiffApfWidget
+      title: Navigate in medical images using differentiable potential fields
   readers:
     - command: napari-potential-field-navigation.get_reader
       accepts_directories: false
@@ -58,5 +58,5 @@ contributions:
       display_name: Autogenerate Threshold
     - command: napari-potential-field-navigation.make_qwidget
       display_name: Example QWidget
-    - command: napari-potential-field-navigation.io_widget
-      display_name: Read inputs
+    - command: napari-potential-field-navigation.make_diff_apf_widget
+      display_name: Diff APF
