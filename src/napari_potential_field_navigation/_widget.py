@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 import magicgui.widgets as widgets
 import napari.utils.notifications as notifications
+import scipy.ndimage as ndi
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
@@ -127,7 +128,7 @@ class IoContainer(Container):
         self._label_reader = widgets.FileEdit(label="Label path")
         self._label_reader.changed.connect(self._read_label)
 
-        self._crop_checkbox = widgets.CheckBox(
+        self._crop_checkbox = widgets.PushButton(
             text="Crop image",
             tooltip="Crop the image and the labels to a bounding box containing all labels > 0. Helps reduce the computation time.",
         )
@@ -159,7 +160,6 @@ class IoContainer(Container):
         )
 
         # Update of the layer stack
-        self._crop_checkbox.value = False
         if "Label" in self._viewer.layers:
             idx = self._viewer.layers.index("Label")
             self._viewer.layers.move(idx, -1)
@@ -187,11 +187,21 @@ class IoContainer(Container):
             self._viewer.layers.remove(label)
 
         self._viewer.layers["Label"].editable = False
-        # Update of the layer stack
-        self._crop_checkbox.value = False
 
-    def _crop_image(self):
-        self._data_dict = {}
+    def _crop_image(self) -> None:
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before croping the image."
+            )
+            return
+        slices = ndi.find_objects(self._viewer.layers["Label"].data)
+        self._viewer.layers["Label"].data = self._viewer.layers["Label"].data[
+            slices[0]
+        ]
+        if "Image" in self._viewer.layers:
+            self._viewer.layers["Image"].data = self._viewer.layers[
+                "Image"
+            ].data[slices[0]]
 
     def _lock(self):
         notifications.show_info(
@@ -202,7 +212,7 @@ class IoContainer(Container):
 
 class PointContainer(Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__()
+        super().__init__(layout="horizontal")
         self._viewer = viewer
         self._source_selection = widgets.PushButton(text="Select goal")
         self._source_selection.changed.connect(self._select_source)
@@ -210,19 +220,11 @@ class PointContainer(Container):
         self._positions_selection = widgets.PushButton(text="Select positions")
         self._positions_selection.changed.connect(self._select_positions)
 
-        self._selection_container = widgets.Container(
-            widgets=[self._source_selection, self._positions_selection],
-            layout="horizontal",
-        )
-        self._agent_count = widgets.SpinBox(
-            label="Number of agents", min=1, max=100, value=1
-        )
-
         self.extend(
             [
                 widgets.Label(label="Point cloud selection"),
-                self._selection_container,
-                self._agent_count,
+                self._source_selection,
+                self._positions_selection,
             ]
         )
 
@@ -296,11 +298,10 @@ class SimulationContainer(Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer = viewer
-        self._time_slider = widgets.FloatLogSlider(
+        self._time_slider = widgets.FloatSlider(
             min=0.1,
             max=1000,
             value=10,
-            base=10,
             label="Simulation final time (s)",
         )
         self._timestep_slider = widgets.FloatSlider(
@@ -317,22 +318,70 @@ class SimulationContainer(Container):
             step=0.1,
             label="Maximal speed (cm/s)",
         )
-        self._start_button = widgets.PushButton(text="Start simulation")
-        self._start_button.changed.connect(self._start_simulation)
+        self._diffusivity_slider = widgets.FloatSlider(
+            min=0,
+            max=10,
+            value=0.1,
+            step=0.1,
+            label="Agent diffusivity (cm^2/s)",
+        )
 
-        self._sliders_container = widgets.Container(
+        self._agent_count = widgets.SpinBox(
+            label="Number of agents", min=1, max=100, value=1
+        )
+        self._start_button = widgets.PushButton(text="Run simulation")
+        self._start_button.changed.connect(self._run_simulation)
+
+        button_container = widgets.Container(
             widgets=[
+                self._agent_count,
+                self._start_button,
+            ],
+            layout="horizontal",
+        )
+
+        self.extend(
+            [
                 widgets.Label(label="Simulation parameters"),
                 self._time_slider,
                 self._timestep_slider,
                 self._speed_slider,
-            ],
+                self._diffusivity_slider,
+                button_container,
+            ]
         )
-        self._sliders_container.changed.connect(self._update_simulation)
-        self._simulation_container = widgets.Container(
-            widgets=[self._sliders_container, self._start_button],
-            layout="horizontal",
-        )
+
+    def _run_simulation(self):
+        raise NotImplementedError
+
+    @property
+    def dt(self) -> float:
+        return self._timestep_slider.value
+
+    @property
+    def tmax(self) -> float:
+        return self._time_slider.value
+
+    @property
+    def vmax(self) -> float:
+        return self._speed_slider.value
+
+    @property
+    def nb_agents(self) -> int:
+        return self._agent_count.value
+
+    @property
+    def diffusivity(self) -> float:
+        return self._diffusivity_slider.value
+
+
+class OptimizationContainer(Container):
+    def __init__(
+        self, viewer: "napari.viewer.Viewer", sim_widget: SimulationContainer
+    ):
+        super().__init__(layout="horizontal")
+        self._viewer = viewer
+        self._sim_widget = sim_widget
         ## Optimization widgets
         self._nb_epochs_box = widgets.SpinBox(
             label="Epochs", min=1, max=1000, step=10, value=100
@@ -340,38 +389,28 @@ class SimulationContainer(Container):
         self._lr_slider = widgets.FloatSpinBox(
             min=0.001, max=10, value=0.1, label="Learning rate"
         )
+
         self._run_optimization_button = widgets.PushButton(
             text="Run optimization"
         )
         self._run_optimization_button.changed.connect(self._run_optimization)
-        self._optimization_container = Container(
+        param_container = widgets.Container(
             widgets=[
-                widgets.Container(
-                    widgets=[
-                        widgets.Label(label="Optimization parameters"),
-                        self._nb_epochs_box,
-                        self._lr_slider,
-                    ]
-                ),
-                self._run_optimization_button,
+                widgets.Label(label="Optimization parameters"),
+                self._nb_epochs_box,
+                self._lr_slider,
             ],
-            layout="horizontal",
         )
+
         self.extend(
             [
-                self._simulation_container,
-                self._optimization_container,
+                param_container,
+                self._run_optimization_button,
             ]
         )
 
-    def _update_simulation(self):
-        print("New values to the simulation !")
-        raise NotImplementedError
-
-    def _start_simulation(self):
-        raise NotImplementedError
-
     def _run_optimization(self):
+        notifications.show_info(f"nb_agents = {self._sim_widget.nb_agents}")
         raise NotImplementedError
 
 
@@ -383,22 +422,18 @@ class DiffApfWidget(Container):
         self._point_container = PointContainer(self._viewer)
         self._apf_container = ApfContainer(self._viewer)
         self._simulation_container = SimulationContainer(self._viewer)
+        self._optimization_container = OptimizationContainer(
+            self._viewer, self._simulation_container
+        )
         self.extend(
             [
                 self._io_container,
                 self._point_container,
                 self._apf_container,
                 self._simulation_container,
+                self._optimization_container,
             ]
         )
-
-    @property
-    def io_container(self) -> IoContainer:
-        return self._io_container
-
-    @property
-    def point_container(self) -> PointContainer:
-        return self._point_container
 
 
 class ExampleQWidget(QWidget):

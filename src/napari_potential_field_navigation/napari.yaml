@@ -6,6 +6,9 @@ visibility: public
 categories: ["Annotation", "Segmentation", "Acquisition"]
 contributions:
   commands:
+    - id: napari-potential-field-navigation.open_samples
+      python_name: napari_potential_field_navigation._sample_data:open_samples
+      title: Open image and label samples for the Diff APF plugin
     - id: napari-potential-field-navigation.get_reader
       python_name: napari_potential_field_navigation._reader:napari_get_reader
       title: Open data with Differentiable Potential Field Navigation
@@ -48,6 +51,9 @@ contributions:
     - command: napari-potential-field-navigation.make_sample_data
       display_name: Differentiable Potential Field Navigation
       key: unique_id.1
+    - command: napari-potential-field-navigation.open_samples
+      display_name: Image / Label Samples
+      key: unique_id.2
   widgets:
     - command: napari-potential-field-navigation.make_container_widget
       display_name: Container Threshold
