@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 import magicgui.widgets as widgets
 import napari.utils.notifications as notifications
+import numpy as np
 import scipy.ndimage as ndi
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
@@ -182,6 +183,7 @@ class IoContainer(Container):
                 metadata=label.metadata,
                 translate=label.translate,
                 name="Label",
+                blending="translucent_no_depth",
                 visible=True,
             )
             self._viewer.layers.remove(label)
@@ -220,6 +222,9 @@ class PointContainer(Container):
         self._positions_selection = widgets.PushButton(text="Select positions")
         self._positions_selection.changed.connect(self._select_positions)
 
+        self._goal_layer = None
+        self._position_layer = None
+
         self.extend(
             [
                 widgets.Label(label="Point cloud selection"),
@@ -229,12 +234,42 @@ class PointContainer(Container):
         )
 
     def _select_source(self):
+        if "Goal" not in self._viewer.layers:
+            self._goal_layer = self._viewer.add_points(
+                name="Goal",
+                edge_color="lime",
+                face_color="transparent",
+                symbol="disc",
+                ndim=3,
+            )
+            self._goal_layer.mouse_drag_callbacks.append(self._on_add_point)
+        if self._source_selection.text == "Edit goal":
+            self._goal_layer.data = np.array([])
+            self._goal_layer.editable = True
+
         print("Select source")
-        raise NotImplementedError
+        self._viewer.layers.selection = [self._goal_layer]
+        self._goal_layer.mode = "add"
 
     def _select_positions(self):
+        if "Initial positions" not in self._viewer.layers:
+            self._position_layer = self._viewer.add_points(
+                name="Initial positions",
+                edge_color="#0055ffff",
+                face_color="transparent",
+                symbol="disc",
+                ndim=3,
+            )
+
         print("Select positions")
-        raise NotImplementedError
+        self._viewer.layers.selection = [self._position_layer]
+        self._position_layer.mode = "add"
+
+    def _on_add_point(self, layer, event):
+        if layer.mode == "add" and layer.editable:
+            layer.add(event.position)
+            layer.editable = False
+            self._source_selection.text = "Edit goal"
 
     @property
     def nb_agents(self) -> int:

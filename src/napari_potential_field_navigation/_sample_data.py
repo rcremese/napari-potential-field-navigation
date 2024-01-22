@@ -38,6 +38,7 @@ def open_samples():
     labels_metadata.pop("channel_axis", None)
     labels_metadata.pop("rgb", None)
     labels_metadata["name"] = "Label"
+    labels_metadata["blending"] = "translucent_no_depth"
     label_layers = [(labels, labels_metadata, "labels")]
     image_layers.extend(label_layers)
     return image_layers
