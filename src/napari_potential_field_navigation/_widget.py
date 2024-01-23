@@ -38,6 +38,7 @@ from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
 from skimage.util import img_as_float
+import scipy.ndimage as ndi
 
 if TYPE_CHECKING:
     import napari
@@ -183,7 +184,7 @@ class IoContainer(Container):
                 metadata=label.metadata,
                 translate=label.translate,
                 name="Label",
-                blending="translucent_no_depth",
+                blending="additive",
                 visible=True,
             )
             self._viewer.layers.remove(label)
@@ -271,15 +272,29 @@ class PointContainer(Container):
             layer.editable = False
             self._source_selection.text = "Edit goal"
 
-    @property
-    def nb_agents(self) -> int:
-        return self._agent_count.value
-
 
 class ApfContainer(Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__(layout="horizontal")
+        super().__init__()
         self._viewer = viewer
+        self._source_selection = widgets.PushButton(text="Select goal")
+        self._source_selection.changed.connect(self._select_source)
+
+        self._positions_selection = widgets.PushButton(text="Select positions")
+        self._positions_selection.changed.connect(self._select_positions)
+
+        self._goal_layer = None
+        self._position_layer = None
+
+        point_cloud_container = widgets.Container(
+            widgets=[
+                widgets.Label(label="Point cloud selection"),
+                self._source_selection,
+                self._positions_selection,
+            ],
+            layout="horizontal",
+        )
+
         self._attractive_weight_slider = widgets.FloatSlider(
             min=1,
             max=1000,
@@ -300,7 +315,7 @@ class ApfContainer(Container):
             min=0.1, max=100, value=1, label="Repulsive radius (cm)"
         )
         self._repulsive_radius_slider.changed.connect(self._update_radius)
-        self._weight_container = widgets.Container(
+        weight_container = widgets.Container(
             widgets=[
                 widgets.Label(label="APF parameters"),
                 self._attractive_weight_slider,
@@ -309,15 +324,53 @@ class ApfContainer(Container):
             ],
             layout="vertical",
         )
-        self._show_apf_box = widgets.CheckBox(text="Show APF")
-        self._show_apf_box.changed.connect(self._show_apf)
+        self._compute_apf_box = widgets.PushButton(text="Compute APF")
+        self._compute_apf_box.changed.connect(self._compute_apf)
 
         self.extend(
             [
-                self._weight_container,
-                self._show_apf_box,
+                point_cloud_container,
+                weight_container,
+                self._compute_apf_box,
             ]
         )
+
+    def _select_source(self):
+        if "Goal" not in self._viewer.layers:
+            self._goal_layer = self._viewer.add_points(
+                name="Goal",
+                face_color="lime",
+                symbol="disc",
+                ndim=3,
+            )
+            self._goal_layer.mouse_drag_callbacks.append(self._on_add_point)
+        if self._source_selection.text == "Edit goal":
+            self._goal_layer.data = np.array([])
+            self._goal_layer.editable = True
+
+        print("Select source")
+        self._viewer.layers.selection = [self._goal_layer]
+        self._goal_layer.mode = "add"
+
+    def _select_positions(self):
+        if "Initial positions" not in self._viewer.layers:
+            self._position_layer = self._viewer.add_points(
+                name="Initial positions",
+                edge_color="#0055ffff",
+                face_color="transparent",
+                symbol="disc",
+                ndim=3,
+            )
+
+        print("Select positions")
+        self._viewer.layers.selection = [self._position_layer]
+        self._position_layer.mode = "add"
+
+    def _on_add_point(self, layer, event):
+        if layer.mode == "add" and layer.editable:
+            layer.add(event.position)
+            layer.editable = False
+            self._source_selection.text = "Edit goal"
 
     def _update_radius(self):
         raise NotImplementedError
@@ -325,8 +378,83 @@ class ApfContainer(Container):
     def _update_apf(self):
         raise NotImplementedError
 
-    def _show_apf(self):
-        raise NotImplementedError
+    def _compute_apf(self):
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before showing the APF."
+            )
+            return
+        if "Goal" not in self._viewer.layers:
+            notifications.show_error(
+                "No goal found. Please select a goal before showing the APF."
+            )
+            return
+        if "APF" in self._viewer.layers:
+            self._viewer.layers.remove("APF")
+            # self._viewer.layers.remove("Initial Vector Field")
+        label_layer = self._viewer.layers["Label"]
+
+        attractive_field = self._compute_attractive_field(
+            label_layer, self.goal_position
+        )
+        repulsive_field = ndi.distance_transform_edt(
+            label_layer.data, sampling=label_layer.scale
+        )
+
+        artificial_potential_field = (
+            self._attractive_weight_slider.value * attractive_field
+            + self._repulsive_weight_slider.value * repulsive_field
+        )
+        artificial_potential_field[label_layer.data == 0] = 0
+        self._viewer.add_image(
+            artificial_potential_field,
+            name="APF",
+            colormap="inferno",
+            blending="additive",
+            # affine=label_layer.affine,
+            scale=label_layer.scale,
+            metadata=label_layer.metadata,
+            visible=False,
+        )
+        self._compute_apf_box.text = "Update APF"
+
+    @staticmethod
+    def _compute_attractive_field(
+        label_layer: "napari.layers.Labels", goal_position: np.ndarray
+    ) -> np.ndarray:
+        assert goal_position.shape == (3,), "Goal position must be 3D vector"
+        center_position = np.array(label_layer.world_to_data(goal_position))
+        spacing = np.array(label_layer.metadata["spacing"])
+        ending = spacing * np.array(label_layer.data.shape)
+        spacial_grid = np.mgrid[
+            0 : ending[0] : spacing[0],
+            0 : ending[1] : spacing[1],
+            0 : ending[2] : spacing[2],
+        ]
+
+        attractive_field = np.linalg.norm(
+            np.stack(
+                [
+                    spacial_grid[0] - goal_position[0],
+                    spacial_grid[1] - goal_position[1],
+                    spacial_grid[2] - goal_position[2],
+                ]
+            ),
+            axis=0,
+        )
+        return attractive_field
+
+    @property
+    def goal_position(self) -> np.ndarray:
+        if self._goal_layer is None:
+            raise ValueError("There is no goal layer in the viewer")
+        return self._goal_layer.data[0]
+
+    @property
+    def initial_positions(self) -> np.ndarray:
+        if self._position_layer is None:
+            raise ValueError("No initial positions selected")
+        return self._position_layer.data
 
 
 class SimulationContainer(Container):
@@ -463,7 +591,7 @@ class DiffApfWidget(Container):
         self.extend(
             [
                 self._io_container,
-                self._point_container,
+                # self._point_container,
                 self._apf_container,
                 self._simulation_container,
                 self._optimization_container,
