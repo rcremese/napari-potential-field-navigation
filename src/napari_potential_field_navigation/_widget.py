@@ -198,13 +198,21 @@ class IoContainer(Container):
             )
             return
         slices = ndi.find_objects(self._viewer.layers["Label"].data)
+        # Take into account the shift of origin
+        starting_index = [slide.start for slide in slices[0]]
+        new_origin = np.array(
+            self._viewer.layers["Label"].data_to_world(starting_index)
+        )
+
         self._viewer.layers["Label"].data = self._viewer.layers["Label"].data[
             slices[0]
         ]
+        self._viewer.layers["Label"].translate = new_origin
         if "Image" in self._viewer.layers:
             self._viewer.layers["Image"].data = self._viewer.layers[
                 "Image"
             ].data[slices[0]]
+            self._viewer.layers["Image"].translate = new_origin
 
     def _lock(self):
         notifications.show_info(
@@ -314,8 +322,7 @@ class ApfContainer(Container):
         self._repulsive_radius_slider = widgets.FloatSlider(
             min=0.1, max=100, value=1, label="Repulsive radius (cm)"
         )
-        self._repulsive_radius_slider.changed.connect(self._update_radius)
-        weight_container = widgets.Container(
+        self._weight_container = widgets.Container(
             widgets=[
                 widgets.Label(label="APF parameters"),
                 self._attractive_weight_slider,
@@ -324,16 +331,20 @@ class ApfContainer(Container):
             ],
             layout="vertical",
         )
+        self._weight_container.changed.connect(self._update_apf)
         self._compute_apf_box = widgets.PushButton(text="Compute APF")
         self._compute_apf_box.changed.connect(self._compute_apf)
 
         self.extend(
             [
                 point_cloud_container,
-                weight_container,
+                self._weight_container,
                 self._compute_apf_box,
             ]
         )
+
+        self._attractive_field = None
+        self._repulsive_field = None
 
     def _select_source(self):
         if "Goal" not in self._viewer.layers:
@@ -372,21 +383,32 @@ class ApfContainer(Container):
             layer.editable = False
             self._source_selection.text = "Edit goal"
 
-    def _update_radius(self):
-        raise NotImplementedError
-
     def _update_apf(self):
-        raise NotImplementedError
+        if self._attractive_field is None or self._repulsive_field is None:
+            notifications.show_info(
+                "No exising Artificial Potential Field found. Computing the APF.."
+            )
+            self._compute_apf()
+        repulsive_field = np.where(
+            self._repulsive_field <= self._repulsive_radius_slider.value,
+            self._repulsive_field,
+            0,
+        )
+        artificial_potential_field = (
+            self._attractive_weight_slider.value * self._attractive_field
+            + self._repulsive_weight_slider.value * repulsive_field
+        )
+        self._viewer.layers["APF"].data = artificial_potential_field
 
     def _compute_apf(self):
         if "Label" not in self._viewer.layers:
             notifications.show_error(
-                "No label found. Please select a label file before showing the APF."
+                "No label found. Please select a label file before computing the APF."
             )
             return
         if "Goal" not in self._viewer.layers:
             notifications.show_error(
-                "No goal found. Please select a goal before showing the APF."
+                "No goal found. Please select a goal before computing the APF."
             )
             return
         if "APF" in self._viewer.layers:
@@ -394,27 +416,31 @@ class ApfContainer(Container):
             # self._viewer.layers.remove("Initial Vector Field")
         label_layer = self._viewer.layers["Label"]
 
-        attractive_field = self._compute_attractive_field(
+        self._attractive_field = self._compute_attractive_field(
             label_layer, self.goal_position
         )
-        repulsive_field = ndi.distance_transform_edt(
+        self._attractive_field[label_layer.data == 0] = 0
+        self._repulsive_field = ndi.distance_transform_edt(
             label_layer.data, sampling=label_layer.scale
         )
-
+        repulsive_field = np.where(
+            self._repulsive_field <= self._repulsive_radius_slider.value,
+            self._repulsive_field,
+            0,
+        )
         artificial_potential_field = (
-            self._attractive_weight_slider.value * attractive_field
+            self._attractive_weight_slider.value * self._attractive_field
             + self._repulsive_weight_slider.value * repulsive_field
         )
-        artificial_potential_field[label_layer.data == 0] = 0
         self._viewer.add_image(
             artificial_potential_field,
             name="APF",
             colormap="inferno",
             blending="additive",
-            # affine=label_layer.affine,
             scale=label_layer.scale,
+            translate=label_layer.translate,
             metadata=label_layer.metadata,
-            visible=False,
+            visible=True,
         )
         self._compute_apf_box.text = "Update APF"
 
@@ -423,13 +449,13 @@ class ApfContainer(Container):
         label_layer: "napari.layers.Labels", goal_position: np.ndarray
     ) -> np.ndarray:
         assert goal_position.shape == (3,), "Goal position must be 3D vector"
-        center_position = np.array(label_layer.world_to_data(goal_position))
-        spacing = np.array(label_layer.metadata["spacing"])
-        ending = spacing * np.array(label_layer.data.shape)
+        starting = np.array(label_layer.translate)
+        spacing = np.array(label_layer.scale)
+        ending = starting + spacing * label_layer.data.shape
         spacial_grid = np.mgrid[
-            0 : ending[0] : spacing[0],
-            0 : ending[1] : spacing[1],
-            0 : ending[2] : spacing[2],
+            starting[0] : ending[0] : spacing[0],
+            starting[1] : ending[1] : spacing[1],
+            starting[2] : ending[2] : spacing[2],
         ]
 
         attractive_field = np.linalg.norm(
