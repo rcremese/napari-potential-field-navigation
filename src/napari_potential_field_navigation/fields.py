@@ -205,6 +205,7 @@ class ScalarField2D(SampledField2D):
                 self._values.to_numpy(), *self.step_sizes, edge_order=2
             ),
             dtype=np.float32,
+            axis=-1,
         )
         return VectorField2D(grad_values, self._bounds, needs_grad)
 
@@ -223,14 +224,14 @@ class VectorField2D(SampledField2D):
         ## Bounds and step sizes
         super().__init__(values, bounds, needs_grad)
         ## Dimension and values
-        if values.ndim != 3 and values.shape[0] != 2:
+        if values.ndim != 3 or values.shape[2] != 2:
             raise ValueError(
                 f"Expected sampled field to be 3D-array with first dimension of size 2. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
             )
         self._values = ti.Vector.field(
             n=self.ndim,
             dtype=ti.float32,
-            shape=values.shape[1:],
+            shape=values.shape[:-1],
             needs_grad=needs_grad,
         )
         self._values.from_numpy(values.astype(np.float32))
@@ -354,14 +355,14 @@ class VectorField3D(SampledField3D):
     ) -> None:
         super().__init__(values, bounds, needs_grad)
         ## Dimension and values
-        if values.ndim != 4 and values.shape[0] != 3:
+        if values.ndim != 4 or values.shape[3] != 3:
             raise ValueError(
                 f"Expected sampled field to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
             )
         self._values = ti.Vector.field(
             n=self.ndim,
             dtype=ti.float32,
-            shape=values.shape[1:],
+            shape=values.shape[:-1],
             needs_grad=needs_grad,
         )
         self._values.from_numpy(values.astype(np.float32))
@@ -399,6 +400,50 @@ class VectorField3D(SampledField3D):
                 )
 
 
+class SampledFieldFactory:
+    @staticmethod
+    def create_vector_field(
+        values: np.ndarray, bounds: Union[Box2D, Box3D], needs_grad=False
+    ) -> Union[VectorField2D, VectorField3D]:
+        if isinstance(bounds, Box2D):
+            if values.ndim != 3 or values.shape[2] != 2:
+                raise ValueError(
+                    f"Expected values to be 3D-array with first dimension of size 2. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
+                )
+            return VectorField2D(values, bounds, needs_grad)
+        elif isinstance(bounds, Box3D):
+            if values.ndim != 4 or values.shape[3] != 3:
+                raise ValueError(
+                    f"Expected values to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
+                )
+            return VectorField3D(values, bounds, needs_grad)
+        else:
+            raise TypeError(
+                f"Expected bounds to be Box2D or Box3D. Get {type(bounds)}"
+            )
+
+    @staticmethod
+    def create_scalar_field(
+        values: np.ndarray, bounds: Union[Box2D, Box3D], needs_grad: bool
+    ) -> Union[ScalarField2D, ScalarField3D]:
+        if isinstance(bounds, Box2D):
+            if values.ndim != 2:
+                raise ValueError(
+                    f"Expected values to be 2D-array. Get {values.ndim} dimensions"
+                )
+            return ScalarField2D(values, bounds, needs_grad)
+        elif isinstance(bounds, Box3D):
+            if values.ndim != 3:
+                raise ValueError(
+                    f"Expected values to be 3D-array. Get {values.ndim} dimensions"
+                )
+            return ScalarField3D(values, bounds, needs_grad)
+        else:
+            raise TypeError(
+                f"Expected bounds to be Box2D or Box3D. Get {type(bounds)}"
+            )
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
@@ -411,26 +456,35 @@ if __name__ == "__main__":
     bounds = Box2D(tm.vec2([-1, -1]), tm.vec2([1, 1]))
 
     field = ScalarField2D(values, bounds)
-    # vector_field = field.spatial_gradient()
-    vector_field = VectorField2D(vector, bounds)
+    vector_field = field.spatial_gradient()
+    # vector_field = VectorField2D(vector, bounds)
 
-    print("res", field.resolution, "step", field.step_size)
+    print("res", field.resolution, "step", field.step_sizes)
 
-    print(
-        field.at(tm.vec2([0, 0])),
-        field.at(tm.vec2([1, 1])),
-        field.at(tm.vec2([1, 0])),
-        field.at(tm.vec2([0, 1])),
-    )
-    print(
-        vector_field.at(tm.vec2([0, 0])), vector[:, 50, 50], vector[:, 49, 49]
-    )
-    print(
-        vector_field.max, np.max(np.linalg.norm(vector_field._values, axis=-1))
-    )
+    @ti.kernel
+    def print_field():
+        print(
+            field.at(tm.vec2([0, 0])),
+            field.at(tm.vec2([1, 1])),
+            field.at(tm.vec2([1, 0])),
+            field.at(tm.vec2([0, 1])),
+        )
+        print(
+            vector_field.at(tm.vec2([0, 0])),
+            vector[:, 50, 50],
+            vector[:, 49, 49],
+        )
+        print(np.max(np.linalg.norm(vector_field._values, axis=-1)))
+
+    # print_field()
     plt.figure()
     plt.imshow(values, origin="lower")
     plt.quiver(
-        vector_field._values[:, :, 0], vector_field._values[:, :, 1], color="k"
+        vector_field.values[:, :, 0],
+        vector_field.values[:, :, 1],
+        color="k",
+        angles="xy",
+        scale_units="xy",
+        scale=1,
     )
     plt.show()

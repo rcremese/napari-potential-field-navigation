@@ -8,8 +8,11 @@ print(vector_field.shape)
 vector_field_ti = ti.Vector.field(
     3, dtype=ti.f32, shape=vector_field.shape[1:]
 )
-
-# np.moveaxis(vector_field, 0, -1)
+position = np.random.randn(100, 2)
+position_ti = ti.Vector.field(2, dtype=ti.f32, shape=position.shape[0])
+position_ti.from_numpy(position)
+print(position_ti.shape)
+# np.moveaxis(vector_field, 0,
 vector_field_ti.from_numpy(vector_field)
 print(vector_field_ti.ndim)
 print(vector_field_ti[0, 5, 0])
