@@ -1,18 +1,23 @@
-from napari.qt.threading import thread_worker
 import numpy as np
-import taichi as ti
+import tifffile
+from pathlib import Path
+import matplotlib.pyplot as plt
 
-ti.init(arch=ti.gpu)
-vector_field = np.mgrid[0:1:0.1, 0:1:0.1, 0:1:0.1]
-print(vector_field.shape)
-vector_field_ti = ti.Vector.field(
-    3, dtype=ti.f32, shape=vector_field.shape[1:]
-)
-position = np.random.randn(100, 2)
-position_ti = ti.Vector.field(2, dtype=ti.f32, shape=position.shape[0])
-position_ti.from_numpy(position)
-print(position_ti.shape)
-# np.moveaxis(vector_field, 0,
-vector_field_ti.from_numpy(vector_field)
-print(vector_field_ti.ndim)
-print(vector_field_ti[0, 5, 0])
+image_path = Path("F:/JBM lab/20221007 c19 test.tif").resolve(strict=True)
+with tifffile.TiffFile(image_path) as tif:
+    nb_slice = len(tif.pages)
+
+    central_page = tif.pages[nb_slice // 2]
+    image = central_page.asarray()
+
+    values = np.zeros(nb_slice)
+    for i, page in enumerate(tif.pages):
+        print(page.is_mask)
+        values[i] = page.asarray().mean()
+        print(f"Slide {i} - mean value : {values[i]}")
+
+print(image.shape)
+print(values)
+plt.imshow(image, cmap="gray")
+plt.hist(values, bins=100)
+plt.show()

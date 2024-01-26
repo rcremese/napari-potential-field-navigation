@@ -106,15 +106,6 @@ class FreeNavigationSimulation(NavigationSimulation):
             )
         self.vector_field = vector_field
 
-        ## Initialisation of the obstacles
-        # if obstacles is None or len(obstacles) == 0:
-        #     obstacles = [Rectangle(0, 0, 0, 0)]  # Dummy obstacle
-        # assert isinstance(obstacles, (list, tuple)) and all(
-        #     isinstance(obs, Rectangle) for obs in obstacles
-        # ), f"Expected obstacles to be a list of Rectangle. Get {obstacles}"
-        # self.nb_obstacles = len(obstacles)
-        # self.obstacles = convert_rectangles(obstacles)
-
         ## Simulation specific parameters
         if not (t_max > 0.0 and dt > 0.0 and diffusivity >= 0.0,):
             raise ValueError(
@@ -199,10 +190,6 @@ class FreeNavigationSimulation(NavigationSimulation):
         ## Domain collisions
         if not self.vector_field.contains(self.states[n, t]):
             self._domain_collision(n, t)
-        ## Obstacle collisions
-        # for o in ti.ndrange(self.nb_obstacles):
-        #     if self.obstacles[o].contains(self.states[n, t]):
-        #         self._obstacle_collision(n, t, o)
 
     @ti.kernel
     def compute_loss(self, t: int):
@@ -226,41 +213,6 @@ class FreeNavigationSimulation(NavigationSimulation):
             elif self.states[n, t][i] > self.vector_field._bounds.max[i]:
                 self.states[n, t][i] = self.vector_field._bounds.max[i]
 
-    # @ti.func
-    # def _obstacle_collision(self, n: int, t: int, o: int):
-    #     for i in ti.static(range(2)):
-    #         ## Collision on the min border
-
-    #         if (self.states[n, t - 1][i] < self.obstacles[o].min[i]) and (
-    #             self.states[n, t][i] >= self.obstacles[o].min[i]
-    #         ):
-    #             toi = (
-    #                 self.obstacles[o].min[i] - self.states[n, t - 1][i]
-    #             ) / (self.states[n, t][i] - self.states[n, t - 1][i])
-    #             self.states[n, t][i] = lerp(
-    #                 self.states[n, t - 1][i], self.states[n, t][i], toi
-    #             ) - ti.abs(self.obstacles[o].min[i] - self.states[n, t][i])
-
-    #             # self.states[n, t][i] = self.obstacles[o].min[i] - ti.abs(
-    #             #     self.obstacles[o].min[i] - self.states[n, t][i]
-    #             # )
-    #             self.states[n, t].vel[i] = -self.states[n, t].vel[i]
-    #         # Collision on the max border
-    #         elif (
-    #             self.states[n, t - 1][i] > self.obstacles[o].max[i]
-    #         ) and (self.states[n, t][i] <= self.obstacles[o].max[i]):
-    #             toi = (
-    #                 self.obstacles[o].max[i] - self.states[n, t - 1][i]
-    #             ) / (self.states[n, t][i] - self.states[n, t - 1][i])
-    #             self.states[n, t][i] = lerp(
-    #                 self.states[n, t - 1][i], self.states[n, t][i], toi
-    #             ) + ti.abs(self.obstacles[o].max[i] - self.states[n, t][i])
-
-    #             # self.states[n, t][i] = self.obstacles[o].max[i] + ti.abs(
-    #             #     self.obstacles[o].max[i] - self.states[n, t][i]
-    #             # )
-    #             self.states[n, t].vel[i] = -self.states[n, t].vel[i]
-
     @ti.kernel
     def _update_force_field(self, lr: float):
         for I in ti.grouped(self.vector_field._values):
@@ -268,17 +220,12 @@ class FreeNavigationSimulation(NavigationSimulation):
                 lr * self.vector_field._values.grad[I]
             )
 
-    ## Properties
-    # @property
-    # def trajectories(self) -> Dict[str, np.ndarray]:
-    #     return self.states.to_numpy()
-
     @property
     def positions(self) -> np.ndarray:
         return self.states.to_numpy()
 
 
-class CluteredNavigationSimulation2D(FreeNavigationSimulation):
+class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
     def __init__(
         self,
         positions: np.ndarray,
