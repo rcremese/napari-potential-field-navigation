@@ -14,16 +14,6 @@ import numpy
 from napari_itk_io._reader import reader_function
 
 
-def make_sample_data(dir_path: str):
-    """Generates an image"""
-    # Return list of tuples
-    # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
-    # Check the documentation for more information about the
-    # add_image_kwargs
-    # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
-    return [(numpy.random.rand(512, 512), {})]
-
-
 def open_samples():
     """Open image and label samples"""
     dirpath = (

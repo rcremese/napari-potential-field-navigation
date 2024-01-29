@@ -31,8 +31,9 @@ class NavigationSimulation(ABC):
     @abstractmethod
     def __init__(self) -> None:
         super().__init__()
-        self._init_pos = None
-        self
+        self._init_pos: ti.Field = None
+        self._positions: ti.Field = None
+        self._noise: ti.Field = None
 
     @abstractmethod
     def reset(self):
@@ -60,6 +61,14 @@ class NavigationSimulation(ABC):
     ):
         raise NotImplementedError
 
+    @abstractmethod
+    def update_time(self, t_max: float, dt: float):
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_positions(self, positions: np.ndarray):
+        raise NotImplementedError
+
 
 class FreeNavigationSimulation(NavigationSimulation):
     def __init__(
@@ -81,6 +90,46 @@ class FreeNavigationSimulation(NavigationSimulation):
         self.vector_field = vector_field
 
         ## Initialisation of the walkers positions
+        self.update_positions(positions)
+
+        ## Initialisation of the force field
+        if not isinstance(vector_field, VectorField2D):
+            raise TypeError(
+                f"Expected force_field to be a VectorField. Get {type(vector_field)}"
+            )
+        self.vector_field = vector_field
+
+        ## Simulation specific parameters
+        self.update_time(t_max, dt)
+
+        if diffusivity < 0.0:
+            raise ValueError(
+                f"Expected diffusivity to be positive. Get {diffusivity}"
+            )
+        self.diffusivity = diffusivity
+        # self._dt = dt
+        # self._t_max = t_max
+        # self._nb_steps = np.ceil(t_max / dt).astype(int)
+        # self.diffusivity = diffusivity
+        # ## Taichi field definition
+        # self._positions: ti.Field = ti.Vector.field(
+        #     n=self.dim,
+        #     dtype=ti.f32,
+        #     shape=(self.nb_walkers, self._nb_steps),
+        #     needs_grad=True,
+        # )
+        # self._noise: ti.Field = ti.Vector.field(
+        #     self.dim,
+        #     dtype=ti.float32,
+        #     shape=(self.nb_walkers, self._nb_steps),
+        #     needs_grad=False,
+        # )
+        # Definition of the loss
+        self.loss = ti.field(ti.f32, shape=(), needs_grad=True)
+        self.target: np.ndarray = None
+
+    ## Public methods
+    def update_positions(self, positions: np.ndarray):
         if self.dim == 2 and not (
             positions.ndim == 2 and positions.shape[1] == 2
         ):
@@ -99,42 +148,35 @@ class FreeNavigationSimulation(NavigationSimulation):
         )
         self._init_pos.from_numpy(positions.astype(np.float32))
 
-        ## Initialisation of the force field
-        if not isinstance(vector_field, VectorField2D):
-            raise TypeError(
-                f"Expected force_field to be a VectorField. Get {type(vector_field)}"
-            )
-        self.vector_field = vector_field
-
-        ## Simulation specific parameters
-        if not (t_max > 0.0 and dt > 0.0 and diffusivity >= 0.0,):
+    def update_time(self, t_max: float, dt: float):
+        if not (t_max > 0.0 and dt > 0.0):
             raise ValueError(
-                f"Expected tmax, dt and diffusivity to be positive. Get {t_max}, {dt} and {diffusivity}"
+                f"Expected tmax and dt to be positive. Get {t_max}, {dt}"
             )
-        self.dt = dt
-        self.t_max = t_max
-        self.nb_steps = np.ceil(t_max / dt).astype(int)
-        self.diffusivity = diffusivity
+        if dt > t_max:
+            raise ValueError(
+                f"Expected dt to be smaller than tmax. Get {dt} > {t_max}"
+            )
+        self._dt = dt
+        self._t_max = t_max
+        self._nb_steps = np.ceil(t_max / dt).astype(int)
+
         ## Taichi field definition
-        self.states: ti.Field = ti.Vector.field(
+        self._positions: ti.Field = ti.Vector.field(
             n=self.dim,
             dtype=ti.f32,
-            shape=(self.nb_walkers, self.nb_steps),
+            shape=(self.nb_walkers, self._nb_steps),
             needs_grad=True,
         )
         self._noise: ti.Field = ti.Vector.field(
             self.dim,
             dtype=ti.float32,
-            shape=(self.nb_walkers, self.nb_steps),
+            shape=(self.nb_walkers, self._nb_steps),
             needs_grad=False,
         )
-        # Definition of the loss
-        self.loss = ti.field(ti.f32, shape=(), needs_grad=True)
-        self.target: np.ndarray = None
 
-    ## Public methods
     def run(self):
-        for t in range(1, self.nb_steps):
+        for t in range(1, self._nb_steps):
             self.step(t)
 
     def optimize(
@@ -155,27 +197,45 @@ class FreeNavigationSimulation(NavigationSimulation):
             self.reset()
             with ti.ad.Tape(self.loss):
                 self.run()
-                self.compute_loss(self.nb_steps - 1)
+                self.compute_loss(self._nb_steps - 1)
             print("Iter=", iter, "Loss=", self.loss[None])
             self._update_force_field(lr)
 
+    def reset(self):
+        if self.dim == 2:
+            self._reset_2d()
+        elif self.dim == 3:
+            self._reset_3d()
+        else:
+            raise ValueError("Simulation dimension must be either 2 or 3")
+
     ### Taichi kernels
     @ti.kernel
-    def reset(self):
+    def _reset_2d(self):
         for n in ti.ndrange(self.nb_walkers):
-            self.states[n, 0] = self._init_pos[n]
-            for t in ti.ndrange(self.nb_steps):
+            self._positions[n, 0] = self._init_pos[n]
+            for t in ti.ndrange(self._nb_steps):
                 self._noise[n, t] = tm.vec2(ti.randn(), ti.randn())
         for i, j in self.vector_field._values:
             self.vector_field._values.grad[i, j] = tm.vec2(0.0, 0.0)
 
     @ti.kernel
+    def _reset_3d(self):
+        for n in ti.ndrange(self.nb_walkers):
+            self._positions[n, 0] = self._init_pos[n]
+            for t in ti.ndrange(self._nb_steps):
+                self._noise[n, t] = tm.vec3(ti.randn(), ti.randn(), ti.randn())
+        for i, j, k in self.vector_field._values:
+            self.vector_field._values.grad[i, j, k] = tm.vec3(0.0, 0.0, 0.0)
+
+    @ti.kernel
     def step(self, t: int):
         for n in ti.ndrange(self.nb_walkers):
-            self.states[n, t] = (
-                self.states[n, t - 1]
-                + self.dt * self.vector_field.at(self.states[n, t - 1])
-                + tm.sqrt(2 * self.dt * self.diffusivity) * self._noise[n, t]
+            self._positions[n, t] = (
+                self._positions[n, t - 1]
+                + self._dt * self.vector_field.at(self._positions[n, t - 1])
+                + tm.sqrt(2 * self.dim * self._dt * self.diffusivity)
+                * self._noise[n, t]
             )
             self.collision_handling(n, t)
 
@@ -188,14 +248,14 @@ class FreeNavigationSimulation(NavigationSimulation):
             t (int): timestep index
         """
         ## Domain collisions
-        if not self.vector_field.contains(self.states[n, t]):
+        if not self.vector_field.contains(self._positions[n, t]):
             self._domain_collision(n, t)
 
     @ti.kernel
     def compute_loss(self, t: int):
         for n in range(self.nb_walkers):
             self.loss[None] += (
-                tm.length(self.states[n, t] - self.target)
+                tm.length(self._positions[n, t] - self.target)
             ) / self.nb_walkers
 
     ## Private methods
@@ -208,10 +268,10 @@ class FreeNavigationSimulation(NavigationSimulation):
             t (int): index of the time step
         """
         for i in ti.static(range(2)):
-            if self.states[n, t][i] < self.vector_field._bounds.min[i]:
-                self.states[n, t][i] = self.vector_field._bounds.min[i]
-            elif self.states[n, t][i] > self.vector_field._bounds.max[i]:
-                self.states[n, t][i] = self.vector_field._bounds.max[i]
+            if self._positions[n, t][i] < self.vector_field._bounds.min[i]:
+                self._positions[n, t][i] = self.vector_field._bounds.min[i]
+            elif self._positions[n, t][i] > self.vector_field._bounds.max[i]:
+                self._positions[n, t][i] = self.vector_field._bounds.max[i]
 
     @ti.kernel
     def _update_force_field(self, lr: float):
@@ -222,7 +282,15 @@ class FreeNavigationSimulation(NavigationSimulation):
 
     @property
     def positions(self) -> np.ndarray:
-        return self.states.to_numpy()
+        return self._positions.to_numpy()
+
+    @property
+    def dt(self) -> float:
+        return self._dt
+
+    @property
+    def t_max(self) -> float:
+        return self._t_max
 
 
 class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
@@ -264,362 +332,86 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
     def collision_handling(self, n: int, t: int):
         super().collision_handling(n, t)
         for o in ti.ndrange(self.nb_obstacles):
-            if self._obstacles[o].contains(self.states[n, t]):
+            if self._obstacles[o].contains(self._positions[n, t]):
                 self._obstacle_collision(n, t, o)
 
     @ti.func
     def _obstacle_collision(self, n: int, t: int, o: int):
         for i in ti.static(range(self.dim)):
             ## Collision on the min border
-            if (self.states[n, t - 1][i] < self._obstacles[o].min[i]) and (
-                self.states[n, t][i] >= self._obstacles[o].min[i]
+            if (self._positions[n, t - 1][i] < self._obstacles[o].min[i]) and (
+                self._positions[n, t][i] >= self._obstacles[o].min[i]
             ):
                 toi = (
-                    self._obstacles[o].min[i] - self.states[n, t - 1][i]
-                ) / (self.states[n, t][i] - self.states[n, t - 1][i])
-                self.states[n, t][i] = lerp(
-                    self.states[n, t - 1][i], self.states[n, t][i], toi
-                ) - ti.abs(self._obstacles[o].min[i] - self.states[n, t][i])
+                    self._obstacles[o].min[i] - self._positions[n, t - 1][i]
+                ) / (self._positions[n, t][i] - self._positions[n, t - 1][i])
+                self._positions[n, t][i] = lerp(
+                    self._positions[n, t - 1][i], self._positions[n, t][i], toi
+                ) - ti.abs(
+                    self._obstacles[o].min[i] - self._positions[n, t][i]
+                )
 
-                # self.states[n, t][i] = self.obstacles[o].min[i] - ti.abs(
-                #     self.obstacles[o].min[i] - self.states[n, t][i]
-                # )
             # Collision on the max border
-            elif (self.states[n, t - 1][i] > self._obstacles[o].max[i]) and (
-                self.states[n, t][i] <= self._obstacles[o].max[i]
-            ):
+            elif (
+                self._positions[n, t - 1][i] > self._obstacles[o].max[i]
+            ) and (self._positions[n, t][i] <= self._obstacles[o].max[i]):
                 toi = (
-                    self._obstacles[o].max[i] - self.states[n, t - 1][i]
-                ) / (self.states[n, t][i] - self.states[n, t - 1][i])
-                self.states[n, t][i] = lerp(
-                    self.states[n, t - 1][i], self.states[n, t][i], toi
-                ) + ti.abs(self._obstacles[o].max[i] - self.states[n, t][i])
-
-                # self.states[n, t][i] = self.obstacles[o].max[i] + ti.abs(
-                #     self.obstacles[o].max[i] - self.states[n, t][i]
-                # )
-                self.states[n, t].vel[i] = -self.states[n, t].vel[i]
-
-
-class WalkerDynamicSimulation2D(NavigationSimulationStoch2D):
-    @ti.kernel
-    def step(self, t: int):
-        for n in ti.ndrange(self.nb_walkers):
-            self.states[n, t].vel = (
-                self.states[n, t - 1].vel
-                + self.dt * self.force_field._at_2d(self.states[n, t - 1])
-                + tm.sqrt(2 * self.dt * self.diffusivity) * self._noise[n, t]
-            )
-            self.states[n, t] = (
-                self.states[n, t - 1] + self.dt * self.states[n, t].vel
-            )
-
-            self.collision_handling(n, t)
-
-
-class WalkerSimulationStoch3D(NavigationSimulation):
-    def __init__(
-        self,
-        positions: np.ndarray,
-        potential_field: ScalarField,
-        obstacles: List[Cube] = None,
-        t_max: float = 100.0,
-        dt: float = 0.1,
-        diffusivity: float = 1.0,
-    ):
-        ## Initialisation of the walkers positions
-        assert (
-            positions.ndim == 2 and positions.shape[1] == 3
-        ), "Expected position to be a (n, 3)-array of position vectors. Get {}".format(
-            positions.shape
-        )
-        self.nb_walkers = positions.shape[0]
-        self._init_pos = ti.Vector.field(
-            3, dtype=ti.f32, shape=(self.nb_walkers,)
-        )
-        self._init_pos.from_numpy(positions)
-
-        ## Initialisation of the force field
-        assert isinstance(
-            potential_field, ScalarField
-        ), "Expected force_field to be a VectorField. Get {}".format(
-            type(potential_field)
-        )
-        self.force_field = spatial_gradient(potential_field, needs_grad=True)
-
-        ## Initialisation of the obstacles
-        if obstacles is None or len(obstacles) == 0:
-            obstacles = [Cube(0, 0, 0, 0, 0, 0)]  # Dummy obstacle
-        assert isinstance(obstacles, (list, tuple)) and all(
-            isinstance(obs, Cube) for obs in obstacles
-        ), f"Expected obstacles to be a list of Rectangle. Get {obstacles}"
-        self.nb_obstacles = len(obstacles)
-        self.obstacles = convert_cubes(obstacles)
-
-        assert (
-            t_max > 0.0 and dt > 0.0 and diffusivity >= 0.0
-        ), f"Expected dt and diffusivity to be positive. Get {dt} and {diffusivity}"
-        self.dt = dt
-        self.t_max = t_max
-        self.nb_steps = np.ceil(t_max / dt).astype(int)
-
-        self.diffusivity = diffusivity
-        ## Simulation specific parameters
-        self.states = State3D.field(
-            shape=(self.nb_walkers, self.nb_steps), needs_grad=True
-        )
-        self._noise = ti.Vector.field(
-            3,
-            dtype=float,
-            shape=(self.nb_walkers, self.nb_steps),
-            needs_grad=False,
-        )
-        # Definition of the loss
-        self.loss = ti.field(ti.f32, shape=(), needs_grad=True)
-
-    ## Public methods
-    def run(self):
-        for t in range(1, self.nb_steps):
-            self.step(t)
-
-    def optimize(
-        self, target_pos: np.ndarray, max_iter: int = 100, lr: float = 1e-3
-    ):
-        assert isinstance(target_pos, np.ndarray) and target_pos.shape == (
-            3,
-        ), f"Expected target_pos to be a 2D-array. Get {target_pos.shape}"
-        assert (
-            isinstance(max_iter, int) and max_iter > 0
-        ), f"Expected max_iter to be a positive integer. Get {max_iter}"
-        assert (
-            isinstance(lr, (float, int)) and lr > 0.0
-        ), f"Expected lr to be a positive float. Get {lr}"
-
-        self.target = tm.vec3(*target_pos)
-        for iter in range(max_iter):
-            self.reset()
-            with ti.ad.Tape(self.loss):
-                self.run()
-                self.compute_loss(self.nb_steps - 1)
-            print("Iter=", iter, "Loss=", self.loss[None])
-            self._update_force_field(lr)
-
-    ### Taichi kernels
-    @ti.kernel
-    def reset(self):
-        for n in ti.ndrange(self.nb_walkers):
-            self.states[n, 0] = self._init_pos[n]
-            self.states[n, 0].vel = tm.vec3(0.0, 0.0, 0.0)
-            for t in ti.ndrange(self.nb_steps):
-                self._noise[n, t] = tm.vec3(ti.randn(), ti.randn(), ti.randn())
-
-    @ti.kernel
-    def step(self, t: int):
-        for n in ti.ndrange(self.nb_walkers):
-            self.states[n, t] = (
-                self.states[n, t - 1]
-                + self.dt * self.force_field._at_3d(self.states[n, t - 1])
-                + tm.sqrt(2 * self.dt * self.diffusivity) * self._noise[n, t]
-            )
-            self.collision_handling(n, t)
-
-    @ti.func
-    def collision_handling(self, n: int, t: int):
-        """Check all collision for a walker n at time t and apply changes.
-
-        Args:
-            n (int): walker index
-            t (int): timestep index
-        """
-        ## Domain collisions
-        if not self.force_field.contains(self.states[n, t]):
-            self._domain_collision(n, t)
-        ## Obstacle collisions
-        for o in ti.ndrange(self.nb_obstacles):
-            if self.obstacles[o].contains(self.states[n, t]):
-                self._obstacle_collision(n, t, o)
-
-    @ti.kernel
-    def compute_loss(self, t: int):
-        for n in range(self.nb_walkers):
-            self.loss[None] += (
-                tm.length(self.states[n, t] - self.target)
-            ) / self.nb_walkers
-
-    ## Private methods
-    @ti.func
-    def _domain_collision(self, n: int, t: int):
-        """Check the collision of a walker at time t with the domain boundaries.
-
-        Args:
-            n (int): index of the walker
-            t (int): index of the time step
-        """
-        for i in ti.static(range(3)):
-            if self.states[n, t][i] < self.force_field._bounds.min[i]:
-                self.states[n, t][i] = self.force_field._bounds.min[i]
-                self.states[n, t].vel[i] *= -1.0
-            elif self.states[n, t][i] > self.force_field._bounds.max[i]:
-                self.states[n, t][i] = self.force_field._bounds.max[i]
-                self.states[n, t].vel[i] *= -1.0
-
-    @ti.func
-    def _obstacle_collision(self, n: int, t: int, o: int):
-        for i in ti.static(range(3)):
-            ## Collision on the min border
-
-            if (self.states[n, t - 1][i] < self.obstacles[o].min[i]) and (
-                self.states[n, t][i] >= self.obstacles[o].min[i]
-            ):
-                toi = (self.obstacles[o].min[i] - self.states[n, t - 1][i]) / (
-                    self.states[n, t][i] - self.states[n, t - 1][i]
+                    self._obstacles[o].max[i] - self._positions[n, t - 1][i]
+                ) / (self._positions[n, t][i] - self._positions[n, t - 1][i])
+                self._positions[n, t][i] = lerp(
+                    self._positions[n, t - 1][i], self._positions[n, t][i], toi
+                ) + ti.abs(
+                    self._obstacles[o].max[i] - self._positions[n, t][i]
                 )
-                self.states[n, t][i] = lerp(
-                    self.states[n, t - 1][i], self.states[n, t][i], toi
-                ) - ti.abs(self.obstacles[o].min[i] - self.states[n, t][i])
 
-                # self.states[n, t][i] = self.obstacles[o].min[i] - ti.abs(
-                #     self.obstacles[o].min[i] - self.states[n, t][i]
-                # )
-                self.states[n, t].vel[i] = -self.states[n, t].vel[i]
-            # Collision on the max border
-            elif (self.states[n, t - 1][i] > self.obstacles[o].max[i]) and (
-                self.states[n, t][i] <= self.obstacles[o].max[i]
-            ):
-                toi = (self.obstacles[o].max[i] - self.states[n, t - 1][i]) / (
-                    self.states[n, t][i] - self.states[n, t - 1][i]
-                )
-                self.states[n, t][i] = lerp(
-                    self.states[n, t - 1][i], self.states[n, t][i], toi
-                ) + ti.abs(self.obstacles[o].max[i] - self.states[n, t][i])
-
-                # self.states[n, t][i] = self.obstacles[o].max[i] + ti.abs(
-                #     self.obstacles[o].max[i] - self.states[n, t][i]
-                # )
-                self.states[n, t].vel[i] = -self.states[n, t].vel[i]
-
-    @ti.kernel
-    def _update_force_field(self, lr: float):
-        for i, j, k in self.force_field._values:
-            self.force_field._values[i, j, k] -= (
-                lr * self.force_field._values.grad[i, j, k]
-            )
-            # if tm.length(self.force_field.values[i, j, k]) > 1.0:
-            #     self.force_field.values[i, j, k] = self.force_field.values[
-            #         i, j, k
-            #     ] / tm.length(self.force_field.values[i, j, k])
-
-    ## Properties
-    @property
-    def trajectories(self) -> Dict[str, np.ndarray]:
-        return self.states.to_numpy()
-
-    @property
-    def positions(self) -> np.ndarray:
-        return self.states.to_numpy()
-
-
-## Dynamic case
-# self.states[n, t].vel = (
-#     self.states[n, t - 1].vel
-#     + self.dt * self._force_field._at_2d(self.states[n, t - 1])
-#     + tm.sqrt(2 * self.dt * self.diffusivity) * self._noise[n, t]
-# )
-# self.states[n, t] = self.states[n, t - 1] + self.dt * self.states[n,t].vel
-
-
-def render(
-    simulation: NavigationSimulationStoch2D,
-    concentration: ScalarField,
-    window_size: Tuple[int, int],
-    output_path: Optional[Path] = None,
-):
-    gui = ti.GUI("Dif0ferentiable Simulation", window_size)
-    scale_vector = np.array(
-        concentration._bounds.width(), concentration._bounds.height()
-    )
-    trajectories = simulation.trajectories
-    obstacles = simulation.obstacles.to_numpy()
-    # Write images in a directory
-    if output_path is not None:
-        output_path = Path(output_path).resolve()
-        if not output_path.exists():
-            output_path.mkdir(parents=True)
-
-    for t in range(simulation.nb_steps):
-        gui.contour(concentration._values, normalize=True)
-        pos = trajectories["pos"][:, t] / scale_vector
-        gui.circles(pos, radius=5, color=int(ti.rgb_to_hex([255, 0, 0])))
-        for obs_min, obs_max in zip(obstacles["min"], obstacles["max"]):
-            gui.rect(
-                topleft=obs_min / scale_vector,
-                bottomright=obs_max / scale_vector,
-                color=0xEEEEF0,
-            )
-        if output_path is not None:
-            gui.show(str(output_path.joinpath(f"frame_{t:03d}.png")))
-        else:
-            gui.show()
+                self._positions[n, t].vel[i] = -self._positions[n, t].vel[i]
 
 
 if __name__ == "__main__":
     from pathlib import Path
+    import matplotlib.pyplot as plt
+    from napari_potential_field_navigation.fields import ScalarField2D
+    from napari_potential_field_navigation.geometries import Box2D
 
-    from snake_ai.utils.io import EnvLoader
-    from snake_ai.envs.converter import (
-        convert_free_space_to_point_cloud,
-        convert_obstacles_to_physical_space,
-        convert_goal_position,
+    ti.init(arch=ti.cpu)
+
+    space = np.linspace(-1, 1, 100)
+    # values = space[:, None] * space[None, :]
+    values = np.linalg.norm(np.mgrid[-1:1:100j, -1:1:100j], axis=0)
+    vector = np.stack(np.gradient(values), dtype=np.float32)
+
+    bounds = Box2D(tm.vec2([-1, -1]), tm.vec2([1, 1]))
+
+    field = ScalarField2D(values, bounds)
+    vector_field = -field.spatial_gradient()
+
+    positions = np.array(
+        [[-0.5, -0.75], [0.5, 0.5], [-0.75, 0.5], [0.75, -0.5]],
+        dtype=np.float32,
     )
-    from snake_ai.taichi.field import ScalarField, spatial_gradient, log
-    from snake_ai.taichi.boxes import Box2D
-    import snake_ai.utils.visualization as vis
-
-    ti.init(arch=ti.gpu)
-    dirpath = Path("/home/rcremese/projects/snake-ai/simulations").resolve(
-        strict=True
-    )
-    path = dirpath.joinpath("Slot(20,20)_pixel_Tmax=800.0_D=1", "seed_10")
-    loader = EnvLoader(path.joinpath("environment.json"))
-    env = loader.load()
-    env.reset()
-    env.close_entry()
-    env.render()
-
-    obj = np.load(path.joinpath("field.npz"))
-
-    bounds = Box2D(obj["lower"], obj["upper"])
-    concentration = ScalarField(obj["data"], bounds)
-    log_concentration = log(concentration)
-    # force_field = spatial_gradient(log_concentration, needs_grad=True)
-    starting_pos = convert_free_space_to_point_cloud(env, step=2)
-
-    # simulation = WalkerDynamicSimulation2D(
-    simulation = NavigationSimulationStoch2D(
-        starting_pos,
-        log_concentration,
-        obstacles=convert_obstacles_to_physical_space(env),
-        t_max=1000,
-        diffusivity=0.01,
+    simulation = FreeNavigationSimulation(
+        vector_field=vector_field,
+        positions=positions,
+        t_max=10,
         dt=0.1,
+        diffusivity=0.001,
     )
     simulation.reset()
     simulation.run()
 
-    render(
-        simulation, concentration, (500, 500), output_path="./blocked_entry"
+    colors = ["red", "orange", "yellow", "brown"]
+    plt.imshow(values, origin="lower", extent=[-1, 1, -1, 1])
+    plt.quiver(
+        vector_field.meshgrid[0],
+        vector_field.meshgrid[1],
+        vector_field.values[:, :, 0],
+        vector_field.values[:, :, 1],
+        color="k",
+        # angles="xy",
+        # scale_units="xy",
+        # scale=1,
     )
-    # vis.animate_walk_history(
-    #     simulationitions,
-    #     log_concentration.values.to_numpy(),
-    #     bound_limits=obj["upper"],
-    #     output_path="test.gif",
-    # )
 
-    simulation.optimize(convert_goal_position(env), max_iter=200, lr=1)
-    render(
-        simulation,
-        concentration,
-        (500, 500),
-        output_path="./optimized_blocked_entry",
-    )
+    for trajectory, color in zip(simulation.positions, colors):
+        plt.plot(trajectory[:, 0], trajectory[:, 1], color=color)
+    plt.show()

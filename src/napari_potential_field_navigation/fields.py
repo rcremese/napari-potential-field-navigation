@@ -50,7 +50,6 @@ class SampledField(ABC):
         self,
         values: np.ndarray,
         bounds: Union[Box2D, Box3D],
-        needs_grad: bool = False,
     ) -> None:
         if not isinstance(values, np.ndarray):
             raise TypeError(
@@ -125,15 +124,15 @@ class SampledField2D(SampledField):
         self,
         values: np.ndarray,
         bounds: Union[Box2D, Box3D],
-        needs_grad: bool = False,
     ) -> None:
-        super().__init__(values, bounds, needs_grad)
+        super().__init__(values, bounds)
         ## Bounds and step sizes
         if not isinstance(bounds, Box2D):
             raise TypeError(f"Expected bounds to be 2D. Get {type(bounds)}")
         self._bounds = bounds
         self.ndim = 2
 
+    @ti.func
     def at(self, pos: ti.template()) -> ti.template():
         idx = tm.ivec2([0, 0])
         toi = tm.vec2([0, 0])
@@ -168,38 +167,21 @@ class SampledField2D(SampledField):
         # Interpolation along y-axis
         return lerp(s0, s1, toi[1])
 
-    @property
-    def linspace(self) -> list[np.ndarray]:
-        return [
-            np.linspace(
-                self._bounds.min[i],
-                self._bounds.max[i],
-                self._values.shape[i],
-            )
-            for i in range(2)
-        ]
-
-    @property
-    def meshgrid(self) -> np.ndarray:
-        return np.meshgrid(*self.linspace, indexing="ij")
-
 
 class ScalarField2D(SampledField2D):
-    def __init__(
-        self, values: np.ndarray, bounds: Box2D, needs_grad: bool = False
-    ) -> None:
-        super().__init__(values, bounds, needs_grad)
+    def __init__(self, values: np.ndarray, bounds: Box2D) -> None:
+        super().__init__(values, bounds)
         ## Dimension and values
         if values.ndim != 2:
             raise ValueError(
                 f"Expected sampled field to be a 2D-array. Get {values.ndim} dimensions"
             )
         self._values = ti.field(
-            dtype=ti.float32, shape=values.shape, needs_grad=needs_grad
+            dtype=ti.float32, shape=values.shape, needs_grad=True
         )
         self._values.from_numpy(values.astype(np.float32))
 
-    def spatial_gradient(self, needs_grad: bool = False) -> "VectorField2D":
+    def spatial_gradient(self) -> "VectorField2D":
         grad_values = np.stack(
             np.gradient(
                 self._values.to_numpy(), *self.step_sizes, edge_order=2
@@ -207,11 +189,21 @@ class ScalarField2D(SampledField2D):
             dtype=np.float32,
             axis=-1,
         )
-        return VectorField2D(grad_values, self._bounds, needs_grad)
+        return VectorField2D(grad_values, self._bounds)
 
     ## Dunder method
     def __repr__(self) -> str:
         return f"ScalarField2D(values.shape={self._values.shape}, bounds={self._bounds})"
+
+    def __mul__(self, factor: float) -> "ScalarField2D":
+        if not isinstance(factor, (float, int)):
+            raise TypeError(
+                f"Can not multiply ScalarField {type(factor)}. Expected float or int"
+            )
+        return ScalarField2D(self.values * factor, self._bounds)
+
+    def __neg__(self) -> "ScalarField2D":
+        return ScalarField2D(-self.values, self._bounds)
 
 
 class VectorField2D(SampledField2D):
@@ -219,10 +211,9 @@ class VectorField2D(SampledField2D):
         self,
         values: np.ndarray,
         bounds: Union[Box2D, Box3D],
-        needs_grad: bool = False,
     ) -> None:
         ## Bounds and step sizes
-        super().__init__(values, bounds, needs_grad)
+        super().__init__(values, bounds)
         ## Dimension and values
         if values.ndim != 3 or values.shape[2] != 2:
             raise ValueError(
@@ -232,7 +223,7 @@ class VectorField2D(SampledField2D):
             n=self.ndim,
             dtype=ti.float32,
             shape=values.shape[:-1],
-            needs_grad=needs_grad,
+            needs_grad=True,
         )
         self._values.from_numpy(values.astype(np.float32))
 
@@ -249,6 +240,16 @@ class VectorField2D(SampledField2D):
     def __repr__(self) -> str:
         return f"VectorField2D(values.shape={self._values.shape}, bounds={self._bounds})"
 
+    def __mul__(self, factor: float) -> "VectorField2D":
+        if not isinstance(factor, (float, int)):
+            raise TypeError(
+                f"Can not multiply VectorField {type(factor)}. Expected float or int"
+            )
+        return VectorField2D(self.values * factor, self._bounds)
+
+    def __neg__(self) -> "VectorField2D":
+        return VectorField2D(-self.values, self._bounds)
+
 
 class SampledField3D(SampledField):
     @abstractmethod
@@ -256,13 +257,13 @@ class SampledField3D(SampledField):
         self,
         values: np.ndarray,
         bounds: Box3D,
-        needs_grad: bool = False,
     ) -> None:
-        super().__init__(values, bounds, needs_grad)
+        super().__init__(values, bounds)
         ## Bounds and ndim
         if not isinstance(bounds, Box3D):
             raise TypeError(f"Expected bounds to be 3D. Get {type(bounds)}")
         self._bounds = bounds
+        self.ndim = 3
 
     @ti.func
     def at(self, pos: ti.template()) -> ti.template():
@@ -319,41 +320,47 @@ class SampledField3D(SampledField):
 
 
 class ScalarField3D(SampledField3D):
-    def __init__(
-        self, values: np.ndarray, bounds: Box3D, needs_grad: bool = False
-    ) -> None:
-        super().__init__(values, bounds, needs_grad)
+    def __init__(self, values: np.ndarray, bounds: Box3D) -> None:
+        super().__init__(values, bounds)
         ## Dimension and values
         if values.ndim != 3:
             raise ValueError(
                 f"Expected sampled field to be a 3D-array. Get {values.ndim} dimensions"
             )
         self._values = ti.field(
-            dtype=ti.float32, shape=values.shape, needs_grad=needs_grad
+            dtype=ti.float32, shape=values.shape, needs_grad=True
         )
         self._values.from_numpy(values.astype(np.float32))
 
-    def spatial_gradient(self, needs_grad: bool = False) -> "VectorField3D":
+    def spatial_gradient(self) -> "VectorField3D":
         grad_values = np.stack(
             np.gradient(
-                self._values.to_numpy(),
+                self.values,
                 *self.step_sizes,
                 edge_order=2,
             ),
             dtype=np.float32,
         )
-        return VectorField3D(grad_values, self._bounds, needs_grad)
+        return VectorField3D(grad_values, self._bounds)
 
     ## Dunder method
     def __repr__(self) -> str:
         return f"ScalarField3D(values.shape={self._values.shape}, bounds={self._bounds})"
 
+    def __mul__(self, factor: float) -> "ScalarField3D":
+        if not isinstance(factor, (float, int)):
+            raise TypeError(
+                f"Can not multiply ScalarField {type(factor)}. Expected float or int"
+            )
+        return ScalarField3D(self.values * factor, self._bounds)
+
+    def __neg__(self) -> "ScalarField3D":
+        return ScalarField3D(-self.values, self._bounds)
+
 
 class VectorField3D(SampledField3D):
-    def __init__(
-        self, values: np.ndarray, bounds: Box3D, needs_grad: bool = False
-    ) -> None:
-        super().__init__(values, bounds, needs_grad)
+    def __init__(self, values: np.ndarray, bounds: Box3D) -> None:
+        super().__init__(values, bounds)
         ## Dimension and values
         if values.ndim != 4 or values.shape[3] != 3:
             raise ValueError(
@@ -363,7 +370,7 @@ class VectorField3D(SampledField3D):
             n=self.ndim,
             dtype=ti.float32,
             shape=values.shape[:-1],
-            needs_grad=needs_grad,
+            needs_grad=True,
         )
         self._values.from_numpy(values.astype(np.float32))
 
@@ -380,43 +387,53 @@ class VectorField3D(SampledField3D):
     def __repr__(self) -> str:
         return f"VectorField3D(values.shape={self._values.shape}, bounds={self._bounds})"
 
-    @property
-    @ti.kernel
-    def max(self) -> float:
-        max_val = -tm.inf
-        for I in ti.grouped(self._values):
-            max_val = ti.max(max_val, tm.length(self._values[I]))
-        return max_val
+    def __mul__(self, factor: float) -> "VectorField3D":
+        if not isinstance(factor, (float, int)):
+            raise TypeError(
+                f"Can not multiply ScalarField {type(factor)}. Expected float or int"
+            )
+        return VectorField3D(self.values * factor, self._bounds)
 
-    def __repr__(self) -> str:
-        return f"VectorField(values={self._values.shape}, bounds={self._bounds}, extrapolation={self._extrapolation})"
+    def __neg__(self) -> "VectorField3D":
+        return VectorField3D(-self.values, self._bounds)
 
-    @ti.kernel
-    def clip(self, value: float):
-        for I in ti.grouped(self._values):
-            if tm.length(self._values[I]) > value:
-                self._values[I] = (
-                    self._values[I] / tm.length(self._values[I]) * value
-                )
+    # @property
+    # @ti.kernel
+    # def max(self) -> float:
+    #     max_val = -tm.inf
+    #     for I in ti.grouped(self._values):
+    #         max_val = ti.max(max_val, tm.length(self._values[I]))
+    #     return max_val
+
+    # def __repr__(self) -> str:
+    #     return f"VectorField(values={self._values.shape}, bounds={self._bounds}, extrapolation={self._extrapolation})"
+
+    # @ti.kernel
+    # def clip(self, value: float):
+    #     for I in ti.grouped(self._values):
+    #         if tm.length(self._values[I]) > value:
+    #             self._values[I] = (
+    #                 self._values[I] / tm.length(self._values[I]) * value
+    #             )
 
 
 class SampledFieldFactory:
     @staticmethod
     def create_vector_field(
-        values: np.ndarray, bounds: Union[Box2D, Box3D], needs_grad=False
+        values: np.ndarray, bounds: Union[Box2D, Box3D]
     ) -> Union[VectorField2D, VectorField3D]:
         if isinstance(bounds, Box2D):
             if values.ndim != 3 or values.shape[2] != 2:
                 raise ValueError(
                     f"Expected values to be 3D-array with first dimension of size 2. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
                 )
-            return VectorField2D(values, bounds, needs_grad)
+            return VectorField2D(values, bounds)
         elif isinstance(bounds, Box3D):
             if values.ndim != 4 or values.shape[3] != 3:
                 raise ValueError(
                     f"Expected values to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
                 )
-            return VectorField3D(values, bounds, needs_grad)
+            return VectorField3D(values, bounds)
         else:
             raise TypeError(
                 f"Expected bounds to be Box2D or Box3D. Get {type(bounds)}"
@@ -424,20 +441,20 @@ class SampledFieldFactory:
 
     @staticmethod
     def create_scalar_field(
-        values: np.ndarray, bounds: Union[Box2D, Box3D], needs_grad: bool
+        values: np.ndarray, bounds: Union[Box2D, Box3D]
     ) -> Union[ScalarField2D, ScalarField3D]:
         if isinstance(bounds, Box2D):
             if values.ndim != 2:
                 raise ValueError(
                     f"Expected values to be 2D-array. Get {values.ndim} dimensions"
                 )
-            return ScalarField2D(values, bounds, needs_grad)
+            return ScalarField2D(values, bounds)
         elif isinstance(bounds, Box3D):
             if values.ndim != 3:
                 raise ValueError(
                     f"Expected values to be 3D-array. Get {values.ndim} dimensions"
                 )
-            return ScalarField3D(values, bounds, needs_grad)
+            return ScalarField3D(values, bounds)
         else:
             raise TypeError(
                 f"Expected bounds to be Box2D or Box3D. Get {type(bounds)}"
@@ -456,7 +473,7 @@ if __name__ == "__main__":
     bounds = Box2D(tm.vec2([-1, -1]), tm.vec2([1, 1]))
 
     field = ScalarField2D(values, bounds)
-    vector_field = field.spatial_gradient()
+    vector_field = -field.spatial_gradient()
     # vector_field = VectorField2D(vector, bounds)
 
     print("res", field.resolution, "step", field.step_sizes)
