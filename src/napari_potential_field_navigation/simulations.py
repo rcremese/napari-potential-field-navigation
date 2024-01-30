@@ -33,7 +33,11 @@ class NavigationSimulation(ABC):
         super().__init__()
         self._init_pos: ti.Field = None
         self._positions: ti.Field = None
+        self._target: ti.Vector = None
         self._noise: ti.Field = None
+        self._nb_steps: int = None
+        self._nb_walkers: int = None
+        self._dim: int = None
 
     @abstractmethod
     def reset(self):
@@ -56,9 +60,7 @@ class NavigationSimulation(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def optimize(
-        self, target_pos: np.ndarray, max_iter: int = 1000, lr: float = 1e-3
-    ):
+    def optimize(self, max_iter: int = 1000, lr: float = 1e-3):
         raise NotImplementedError
 
     @abstractmethod
@@ -74,17 +76,17 @@ class FreeNavigationSimulation(NavigationSimulation):
     def __init__(
         self,
         positions: np.ndarray,
+        target: np.ndarray,
         vector_field: Union[VectorField2D, VectorField3D],
-        # obstacles: List[geometries.Box2D] = None,
         t_max: float = 100.0,
         dt: float = 0.1,
         diffusivity: float = 1.0,
     ):
         ## Initialisation of the vector field
         if isinstance(vector_field, VectorField2D):
-            self.dim = 2
+            self._dim = 2
         elif isinstance(vector_field, VectorField3D):
-            self.dim = 3
+            self._dim = 3
         else:
             raise TypeError("Vector field must be either 2D or 3D")
         self.vector_field = vector_field
@@ -92,12 +94,15 @@ class FreeNavigationSimulation(NavigationSimulation):
         ## Initialisation of the walkers positions
         self.update_positions(positions)
 
-        ## Initialisation of the force field
-        if not isinstance(vector_field, VectorField2D):
-            raise TypeError(
-                f"Expected force_field to be a VectorField. Get {type(vector_field)}"
+        ## Initiailisation of the taget point
+        if target.shape != (self._dim,):
+            raise ValueError(
+                f"Expected target to be a {self._dim}D-array. Get {target.shape} array"
             )
-        self.vector_field = vector_field
+        if self.dim == 2:
+            self.target = tm.vec2(target)
+        elif self.dim == 3:
+            self.target = tm.vec3(target)
 
         ## Simulation specific parameters
         self.update_time(t_max, dt)
@@ -107,44 +112,27 @@ class FreeNavigationSimulation(NavigationSimulation):
                 f"Expected diffusivity to be positive. Get {diffusivity}"
             )
         self.diffusivity = diffusivity
-        # self._dt = dt
-        # self._t_max = t_max
-        # self._nb_steps = np.ceil(t_max / dt).astype(int)
-        # self.diffusivity = diffusivity
-        # ## Taichi field definition
-        # self._positions: ti.Field = ti.Vector.field(
-        #     n=self.dim,
-        #     dtype=ti.f32,
-        #     shape=(self.nb_walkers, self._nb_steps),
-        #     needs_grad=True,
-        # )
-        # self._noise: ti.Field = ti.Vector.field(
-        #     self.dim,
-        #     dtype=ti.float32,
-        #     shape=(self.nb_walkers, self._nb_steps),
-        #     needs_grad=False,
-        # )
+
         # Definition of the loss
         self.loss = ti.field(ti.f32, shape=(), needs_grad=True)
-        self.target: np.ndarray = None
 
     ## Public methods
     def update_positions(self, positions: np.ndarray):
-        if self.dim == 2 and not (
+        if self._dim == 2 and not (
             positions.ndim == 2 and positions.shape[1] == 2
         ):
             raise ValueError(
                 f"Expected positions to be a (n, 2)-array of position vectors. Get {positions.shape}"
             )
-        if self.dim == 3 and not (
+        if self._dim == 3 and not (
             positions.ndim == 2 and positions.shape[1] == 3
         ):
             raise ValueError(
                 f"Expected positions to be a (n, 3)-array of position vectors. Get {positions.shape}"
             )
-        self.nb_walkers = positions.shape[0]
+        self._nb_walkers = positions.shape[0]
         self._init_pos: ti.Field = ti.Vector.field(
-            self.dim, dtype=ti.f32, shape=(self.nb_walkers,)
+            self._dim, dtype=ti.f32, shape=(self._nb_walkers,)
         )
         self._init_pos.from_numpy(positions.astype(np.float32))
 
@@ -163,15 +151,15 @@ class FreeNavigationSimulation(NavigationSimulation):
 
         ## Taichi field definition
         self._positions: ti.Field = ti.Vector.field(
-            n=self.dim,
+            n=self._dim,
             dtype=ti.f32,
-            shape=(self.nb_walkers, self._nb_steps),
+            shape=(self._nb_walkers, self._nb_steps),
             needs_grad=True,
         )
         self._noise: ti.Field = ti.Vector.field(
-            self.dim,
+            self._dim,
             dtype=ti.float32,
-            shape=(self.nb_walkers, self._nb_steps),
+            shape=(self._nb_walkers, self._nb_steps),
             needs_grad=False,
         )
 
@@ -180,19 +168,23 @@ class FreeNavigationSimulation(NavigationSimulation):
             self.step(t)
 
     def optimize(
-        self, target_pos: np.ndarray, max_iter: int = 100, lr: float = 1e-3
+        self,
+        max_iter: int = 100,
+        lr: float = 1e-3,
+        clip_value: float = 0.0,
     ):
-        assert isinstance(target_pos, np.ndarray) and target_pos.shape == (
-            self.dim,
-        ), f"Expected target_pos to be a {self.dim}D-array. Get {target_pos.shape}"
         assert (
             isinstance(max_iter, int) and max_iter > 0
         ), f"Expected max_iter to be a positive integer. Get {max_iter}"
         assert (
             isinstance(lr, (float, int)) and lr > 0.0
         ), f"Expected lr to be a positive float. Get {lr}"
+        if clip_value > 0.0:
+            assert (
+                isinstance(clip_value, (float, int)) and clip_value > 0.0
+            ), f"Expected clip_value to be a positive float. Get {clip_value}"
+            clip_value = float(clip_value)
 
-        self.target = tm.vec2(*target_pos)
         for iter in range(max_iter):
             self.reset()
             with ti.ad.Tape(self.loss):
@@ -200,11 +192,13 @@ class FreeNavigationSimulation(NavigationSimulation):
                 self.compute_loss(self._nb_steps - 1)
             print("Iter=", iter, "Loss=", self.loss[None])
             self._update_force_field(lr)
+            if clip_value > 0.0:
+                self.vector_field.norm_clip(clip_value)
 
     def reset(self):
-        if self.dim == 2:
+        if self._dim == 2:
             self._reset_2d()
-        elif self.dim == 3:
+        elif self._dim == 3:
             self._reset_3d()
         else:
             raise ValueError("Simulation dimension must be either 2 or 3")
@@ -212,7 +206,7 @@ class FreeNavigationSimulation(NavigationSimulation):
     ### Taichi kernels
     @ti.kernel
     def _reset_2d(self):
-        for n in ti.ndrange(self.nb_walkers):
+        for n in ti.ndrange(self._nb_walkers):
             self._positions[n, 0] = self._init_pos[n]
             for t in ti.ndrange(self._nb_steps):
                 self._noise[n, t] = tm.vec2(ti.randn(), ti.randn())
@@ -221,7 +215,7 @@ class FreeNavigationSimulation(NavigationSimulation):
 
     @ti.kernel
     def _reset_3d(self):
-        for n in ti.ndrange(self.nb_walkers):
+        for n in ti.ndrange(self._nb_walkers):
             self._positions[n, 0] = self._init_pos[n]
             for t in ti.ndrange(self._nb_steps):
                 self._noise[n, t] = tm.vec3(ti.randn(), ti.randn(), ti.randn())
@@ -230,11 +224,11 @@ class FreeNavigationSimulation(NavigationSimulation):
 
     @ti.kernel
     def step(self, t: int):
-        for n in ti.ndrange(self.nb_walkers):
+        for n in ti.ndrange(self._nb_walkers):
             self._positions[n, t] = (
                 self._positions[n, t - 1]
                 + self._dt * self.vector_field.at(self._positions[n, t - 1])
-                + tm.sqrt(2 * self.dim * self._dt * self.diffusivity)
+                + tm.sqrt(2 * self._dim * self._dt * self.diffusivity)
                 * self._noise[n, t]
             )
             self.collision_handling(n, t)
@@ -253,10 +247,10 @@ class FreeNavigationSimulation(NavigationSimulation):
 
     @ti.kernel
     def compute_loss(self, t: int):
-        for n in range(self.nb_walkers):
+        for n in range(self._nb_walkers):
             self.loss[None] += (
                 tm.length(self._positions[n, t] - self.target)
-            ) / self.nb_walkers
+            ) / self._nb_walkers
 
     ## Private methods
     @ti.func
@@ -267,7 +261,7 @@ class FreeNavigationSimulation(NavigationSimulation):
             n (int): index of the walker
             t (int): index of the time step
         """
-        for i in ti.static(range(2)):
+        for i in ti.static(range(self._dim)):
             if self._positions[n, t][i] < self.vector_field._bounds.min[i]:
                 self._positions[n, t][i] = self.vector_field._bounds.min[i]
             elif self._positions[n, t][i] > self.vector_field._bounds.max[i]:
@@ -280,23 +274,48 @@ class FreeNavigationSimulation(NavigationSimulation):
                 lr * self.vector_field._values.grad[I]
             )
 
+    ## Properties
     @property
     def positions(self) -> np.ndarray:
+        """Positions of all the walkers at each time step.
+
+        Returns:
+            np.ndarray: array of dimensions (nb_walkers, nb_steps, spatial_dim)
+        """
         return self._positions.to_numpy()
 
     @property
-    def dt(self) -> float:
-        return self._dt
+    def trajectories(self) -> np.ndarray:
+        """Trajectories of all the walkers with added ids and time steps. Useful for napari.Tracks plotting
+
+        Returns:
+            np.ndarray: array of dimensions (nb_walkers * nb_steps, ID + time + spatial_dim)
+        """
+        positions = self.positions.reshape(
+            (self.nb_walkers * self.nb_steps, self.dim)
+        )
+        ids = np.repeat(np.arange(self.nb_walkers), self.nb_steps)
+        times = np.tile(np.arange(self.nb_steps), self.nb_walkers)
+        return np.column_stack((ids, times, positions))
 
     @property
-    def t_max(self) -> float:
-        return self._t_max
+    def nb_walkers(self) -> int:
+        return self._nb_walkers
+
+    @property
+    def nb_steps(self) -> int:
+        return self._nb_steps
+
+    @property
+    def dim(self) -> int:
+        return self._dim
 
 
 class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
     def __init__(
         self,
         positions: np.ndarray,
+        target: np.ndarray,
         vector_field: VectorField2D,
         obstacles: List[geometries.Box2D],
         t_max: float = 100,
@@ -311,14 +330,14 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
             )
 
         self.nb_obstacles = len(obstacles)
-        if self.dim == 2:
+        if self._dim == 2:
             if not all(isinstance(obs, geometries.Box2D) for obs in obstacles):
                 raise TypeError(
                     f"Expected obstacles to be a list of 2D boxes. Get {obstacles}"
                 )
             self._obstacles = geometries.Box2D.field(self.nb_obstacles)
 
-        if self.dim == 3:
+        if self._dim == 3:
             if not all(isinstance(obs, geometries.Box3D) for obs in obstacles):
                 raise TypeError(
                     f"Expected obstacles to be a list of 3D boxes. Get {obstacles}"
@@ -337,7 +356,7 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
 
     @ti.func
     def _obstacle_collision(self, n: int, t: int, o: int):
-        for i in ti.static(range(self.dim)):
+        for i in ti.static(range(self._dim)):
             ## Collision on the min border
             if (self._positions[n, t - 1][i] < self._obstacles[o].min[i]) and (
                 self._positions[n, t][i] >= self._obstacles[o].min[i]
@@ -351,7 +370,7 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
                     self._obstacles[o].min[i] - self._positions[n, t][i]
                 )
 
-            # Collision on the max border
+            ## Collision on the max border
             elif (
                 self._positions[n, t - 1][i] > self._obstacles[o].max[i]
             ) and (self._positions[n, t][i] <= self._obstacles[o].max[i]):
@@ -363,8 +382,6 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
                 ) + ti.abs(
                     self._obstacles[o].max[i] - self._positions[n, t][i]
                 )
-
-                self._positions[n, t].vel[i] = -self._positions[n, t].vel[i]
 
 
 if __name__ == "__main__":

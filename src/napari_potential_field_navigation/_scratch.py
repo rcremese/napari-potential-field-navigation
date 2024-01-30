@@ -1,23 +1,31 @@
+import napari
+from skimage import data
 import numpy as np
-import tifffile
-from pathlib import Path
-import matplotlib.pyplot as plt
 
-image_path = Path("F:/JBM lab/20221007 c19 test.tif").resolve(strict=True)
-with tifffile.TiffFile(image_path) as tif:
-    nb_slice = len(tif.pages)
+hubble_image = data.hubble_deep_field()
 
-    central_page = tif.pages[nb_slice // 2]
-    image = central_page.asarray()
+tracks_data = np.asarray(
+    [
+        [1, 0, 236, 0],
+        [1, 1, 236, 100],
+        [1, 2, 236, 200],
+        [1, 3, 236, 500],
+        [1, 4, 236, 1000],
+        [2, 0, 436, 0],
+        [2, 1, 436, 100],
+        [2, 2, 436, 200],
+        [2, 3, 436, 500],
+        [2, 4, 436, 1000],
+        [3, 0, 636, 0],
+        [3, 1, 636, 100],
+        [3, 2, 636, 200],
+        [3, 3, 636, 500],
+        [3, 4, 636, 1000],
+    ]
+)
+track_confidence = np.array(5 * [0.9] + 5 * [0.3] + 5 * [0.1])
+properties = {"time": tracks_data[:, 1], "confidence": track_confidence}
 
-    values = np.zeros(nb_slice)
-    for i, page in enumerate(tif.pages):
-        print(page.is_mask)
-        values[i] = page.asarray().mean()
-        print(f"Slide {i} - mean value : {values[i]}")
-
-print(image.shape)
-print(values)
-plt.imshow(image, cmap="gray")
-plt.hist(values, bins=100)
-plt.show()
+viewer = napari.view_image(hubble_image)
+viewer.add_tracks(tracks_data, properties=properties)
+napari.run()

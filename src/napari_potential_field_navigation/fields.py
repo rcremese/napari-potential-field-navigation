@@ -227,7 +227,7 @@ class VectorField2D(SampledField2D):
         )
         self._values.from_numpy(values.astype(np.float32))
 
-    @ti.func
+    @ti.kernel
     def norm_clip(self, value: float):
         assert value > 0, "Expected value to be positive. Get {}".format(value)
         for I in ti.grouped(self._values):
@@ -340,6 +340,7 @@ class ScalarField3D(SampledField3D):
                 edge_order=2,
             ),
             dtype=np.float32,
+            axis=-1,
         )
         return VectorField3D(grad_values, self._bounds)
 
@@ -364,7 +365,7 @@ class VectorField3D(SampledField3D):
         ## Dimension and values
         if values.ndim != 4 or values.shape[3] != 3:
             raise ValueError(
-                f"Expected sampled field to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
+                f"Expected sampled field to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[3]}"
             )
         self._values = ti.Vector.field(
             n=self.ndim,
@@ -374,7 +375,7 @@ class VectorField3D(SampledField3D):
         )
         self._values.from_numpy(values.astype(np.float32))
 
-    @ti.func
+    @ti.kernel
     def norm_clip(self, value: float):
         assert value > 0, "Expected value to be positive. Get {}".format(value)
         for I in ti.grouped(self._values):

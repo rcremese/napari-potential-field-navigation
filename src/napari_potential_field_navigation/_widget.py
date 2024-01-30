@@ -218,13 +218,13 @@ class ApfContainer(Container):
         #     label="Attractive weight (unit)",
         # )
         # self._attractive_weight_slider.changed.connect(self._plot_apf)
-        # self._repulsive_weight_slider = widgets.FloatSlider(
-        #     min=1,
-        #     max=1000,
-        #     step=1,
-        #     value=1,
-        #     label="Repulsive weight (unit)",
-        # )
+        self._repulsive_weight_slider = widgets.FloatSlider(
+            min=1,
+            max=1000,
+            step=1,
+            value=1,
+            label="Repulsive weight (unit)",
+        )
         # self._repulsive_weight_slider.changed.connect(self._plot_apf)
         self._repulsive_radius_slider = widgets.FloatSlider(
             min=0.1, max=100, value=1, label="Repulsive radius (cm)"
@@ -235,7 +235,7 @@ class ApfContainer(Container):
                 self._ratio_slider,
                 self._resolution_combobox,
                 # self._attractive_weight_slider,
-                # self._repulsive_weight_slider,
+                self._repulsive_weight_slider,
                 self._repulsive_radius_slider,
             ],
             layout="vertical",
@@ -366,8 +366,9 @@ class ApfContainer(Container):
         )
         ratio = self._ratio_slider.value
         artificial_potential_field = (
-            1 - ratio
-        ) * self._attractive_field + ratio * repulsive_field
+            (1 - ratio) * self._attractive_field
+            + self._repulsive_weight_slider.value * ratio * repulsive_field
+        )
         return ScalarField3D(artificial_potential_field, self._bounds)
 
 
@@ -383,7 +384,7 @@ class SimulationContainer(Container):
         self._time_slider = widgets.FloatSlider(
             min=0.1,
             max=1000,
-            value=10,
+            value=100,
             label="Simulation final time (s)",
         )
         self._timestep_slider = widgets.FloatSlider(
@@ -394,16 +395,16 @@ class SimulationContainer(Container):
             label="Simulation time step (s)",
         )
         self._speed_slider = widgets.FloatSlider(
-            min=0.1,
+            min=0,
             max=10,
-            value=1,
+            value=0,
             step=0.1,
             label="Maximal speed (cm/s)",
         )
         self._diffusivity_slider = widgets.FloatSlider(
             min=0,
             max=10,
-            value=0.1,
+            value=0,
             step=0.1,
             label="Agent diffusivity (cm^2/s)",
         )
@@ -432,6 +433,27 @@ class SimulationContainer(Container):
                 button_container,
             ]
         )
+        ## Optimization widgets
+        self._nb_epochs_box = widgets.SpinBox(
+            label="Epochs", min=1, max=1000, step=10, value=100
+        )
+        self._lr_slider = widgets.FloatSpinBox(
+            min=0.001, max=10, value=0.1, label="Learning rate"
+        )
+
+        self._run_optimization_button = widgets.PushButton(
+            text="Run optimization"
+        )
+        self._run_optimization_button.changed.connect(self._run_optimization)
+
+        self.extend(
+            [
+                widgets.Label(label="Optimization parameters"),
+                self._nb_epochs_box,
+                self._lr_slider,
+                self._run_optimization_button,
+            ]
+        )
 
         self.simulation = None
 
@@ -446,20 +468,18 @@ class SimulationContainer(Container):
             return False
         self.simulation.reset()
         self.simulation.run()
-        self._plot_trajectories()
+        self._plot_trajectories("Initial trajectories")
         return True
 
-    def _plot_trajectories(self) -> bool:
+    def _plot_trajectories(self, name: str) -> bool:
         if self.simulation is None:
-            notifications.show_error(
-                "The simulation could is not initialized."
-            )
+            notifications.show_error("The simulation is not initialized.")
             return False
-        if "Trajectories" in self._viewer.layers:
-            self._viewer.layers.remove("Trajectories")
+        if name.capitalize() in self._viewer.layers:
+            self._viewer.layers.remove(name.capitalize())
         self._viewer.add_tracks(
-            self.simulation.positions,
-            name="Trajectories",
+            self.simulation.trajectories,
+            name=name.capitalize(),
         )
         return True
 
@@ -487,6 +507,9 @@ class SimulationContainer(Container):
                 "No potential field found. Please compute the APF before running the simulation."
             )
             return False
+        vector_field = -potential_field.spatial_gradient()
+        if self._speed_slider.value > 0:
+            vector_field.norm_clip(self._speed_slider.value)
 
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -499,19 +522,40 @@ class SimulationContainer(Container):
                 "No initial positions found. Please select initial positions before running the simulation."
             )
             return False
-        vector_field = -potential_field.spatial_gradient()
+
         initial_positions = np.repeat(
             self._viewer.layers["Initial positions"].data,
             self._agent_count.value,
             axis=0,
         )
+        if "Goal" not in self._viewer.layers:
+            notifications.show_error(
+                "No goal found. Please select a goal before running the simulation."
+            )
+            return False
+        goal = self._viewer.layers["Goal"].data[0]
+        assert goal.shape == (3,), "Goal position must be a 3D vector"
+
         self.simulation = FreeNavigationSimulation(
             initial_positions,
+            goal,
             vector_field,
             t_max=self.tmax,
             dt=self.dt,
             diffusivity=self.diffusivity,
         )
+        return True
+
+    def _run_optimization(self):
+        if not self._initialize_simulation():
+            notifications.show_error(
+                "The simulation could not be initialized."
+            )
+            return False
+        self.simulation.optimize(
+            max_iter=self._nb_epochs_box.value, lr=self._lr_slider.value
+        )
+        self._plot_trajectories("Optimized trajectories")
         return True
 
     @property
@@ -577,7 +621,11 @@ class OptimizationContainer(Container):
 class DiffApfWidget(Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
-        ti.init(arch=ti.gpu)
+        try:
+            ti.init(arch=ti.gpu)
+        except RuntimeError:
+            notifications.show_warning("No GPU found. Using CPU.")
+            ti.init(arch=ti.cpu)
         self._viewer = viewer
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
@@ -594,6 +642,6 @@ class DiffApfWidget(Container):
                 self._point_container,
                 self._apf_container,
                 self._simulation_container,
-                self._optimization_container,
+                # self._optimization_container,
             ]
         )
