@@ -302,7 +302,9 @@ class ApfContainer(Container):
             )
             return False
 
-        artificial_potential_field = self.potential_field.values
+        artificial_potential_field = np.where(
+            self._viewer.layers["Label"].data, self.potential_field.values, 0
+        )
         try:
             self._viewer.layers["APF"].data = artificial_potential_field
         except KeyError:
@@ -363,6 +365,9 @@ class ApfContainer(Container):
                 / (collision_radius * self._distance_field[valid_indices])
             )
             ** 2
+        )
+        repulsive_field = np.where(
+            self._distance_field > 0, repulsive_field, 1e20
         )
         ratio = self._ratio_slider.value
         artificial_potential_field = (
