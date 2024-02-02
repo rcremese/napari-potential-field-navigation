@@ -6,6 +6,9 @@ visibility: public
 categories: ["Annotation", "Segmentation", "Acquisition"]
 contributions:
   commands:
+    - id: napari-potential-field-navigation.open_samples
+      python_name: napari_potential_field_navigation._sample_data:open_samples
+      title: Open image and label samples for the Diff APF plugin
     - id: napari-potential-field-navigation.get_reader
       python_name: napari_potential_field_navigation._reader:napari_get_reader
       title: Open data with Differentiable Potential Field Navigation
@@ -18,18 +21,9 @@ contributions:
     - id: napari-potential-field-navigation.make_sample_data
       python_name: napari_potential_field_navigation._sample_data:make_sample_data
       title: Load sample data from Differentiable Potential Field Navigation
-    - id: napari-potential-field-navigation.make_container_widget
-      python_name: napari_potential_field_navigation:ImageThreshold
-      title: Make threshold Container widget
-    - id: napari-potential-field-navigation.make_magic_widget
-      python_name: napari_potential_field_navigation:threshold_magic_widget
-      title: Make threshold magic widget
-    - id: napari-potential-field-navigation.make_function_widget
-      python_name: napari_potential_field_navigation:threshold_autogenerate_widget
-      title: Make threshold function widget
-    - id: napari-potential-field-navigation.make_qwidget
-      python_name: napari_potential_field_navigation:ExampleQWidget
-      title: Make example QWidget
+    - id: napari-potential-field-navigation.make_diff_apf_widget
+      python_name: napari_potential_field_navigation:DiffApfWidget
+      title: Navigate in medical images using differentiable potential fields
   readers:
     - command: napari-potential-field-navigation.get_reader
       accepts_directories: false
@@ -45,13 +39,9 @@ contributions:
     - command: napari-potential-field-navigation.make_sample_data
       display_name: Differentiable Potential Field Navigation
       key: unique_id.1
+    - command: napari-potential-field-navigation.open_samples
+      display_name: Image / Label Samples
+      key: unique_id.2
   widgets:
-    - command: napari-potential-field-navigation.make_container_widget
-      display_name: Container Threshold
-    - command: napari-potential-field-navigation.make_magic_widget
-      display_name: Magic Threshold
-    - command: napari-potential-field-navigation.make_function_widget
-      autogenerate: true
-      display_name: Autogenerate Threshold
-    - command: napari-potential-field-navigation.make_qwidget
-      display_name: Example QWidget
+    - command: napari-potential-field-navigation.make_diff_apf_widget
+      display_name: Diff APF
