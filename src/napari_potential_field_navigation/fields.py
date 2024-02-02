@@ -99,7 +99,7 @@ class SampledField(ABC):
         return self._values.shape
 
     @property
-    def linspace(self) -> list[np.ndarray]:
+    def linspace(self) -> List[np.ndarray]:
         return [
             np.linspace(
                 self._bounds.min[i],
