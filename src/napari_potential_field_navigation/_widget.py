@@ -4,10 +4,6 @@ import magicgui.widgets as widgets
 import napari.utils.notifications as notifications
 import numpy as np
 import scipy.ndimage as ndi
-from magicgui import magic_factory
-from magicgui.widgets import CheckBox, Container, create_widget
-from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
-from skimage.util import img_as_float
 import scipy.ndimage as ndi
 from napari.qt.threading import thread_worker
 import taichi as ti
@@ -22,7 +18,7 @@ if TYPE_CHECKING:
     import napari
 
 
-class IoContainer(Container):
+class IoContainer(widgets.Container):
     """Contains all informations about the input datas"""
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
@@ -127,7 +123,7 @@ class IoContainer(Container):
         raise NotImplementedError
 
 
-class PointContainer(Container):
+class PointContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__(layout="horizontal")
         self._viewer = viewer
@@ -197,7 +193,7 @@ class PointContainer(Container):
         return self._position_layer.data
 
 
-class ApfContainer(Container):
+class ApfContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer = viewer
@@ -377,7 +373,7 @@ class ApfContainer(Container):
         return ScalarField3D(artificial_potential_field, self._bounds)
 
 
-class SimulationContainer(Container):
+class SimulationContainer(widgets.Container):
     def __init__(
         self,
         viewer: "napari.viewer.Viewer",
@@ -584,7 +580,7 @@ class SimulationContainer(Container):
         return self._diffusivity_slider.value
 
 
-class OptimizationContainer(Container):
+class OptimizationContainer(widgets.Container):
     def __init__(
         self, viewer: "napari.viewer.Viewer", sim_widget: SimulationContainer
     ):
@@ -623,7 +619,7 @@ class OptimizationContainer(Container):
         raise NotImplementedError
 
 
-class DiffApfWidget(Container):
+class DiffApfWidget(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         try:
