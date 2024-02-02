@@ -84,4 +84,4 @@ venv/
 **/_version.py
 
 # data folder
-sample_datas/*
+# sample_datas/*

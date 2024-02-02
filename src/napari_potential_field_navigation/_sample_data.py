@@ -10,11 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy
 from napari_itk_io._reader import reader_function
 
 
-def open_samples():
+def open_lung_samples():
     """Open image and label samples"""
     dirpath = (
         Path(__file__).parents[2].joinpath("sample_datas").resolve(strict=True)
@@ -28,7 +27,6 @@ def open_samples():
     labels_metadata.pop("channel_axis", None)
     labels_metadata.pop("rgb", None)
     labels_metadata["name"] = "Label"
-    labels_metadata["blending"] = "translucent_no_depth"
     label_layers = [(labels, labels_metadata, "labels")]
     image_layers.extend(label_layers)
     return image_layers
