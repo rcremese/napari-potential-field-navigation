@@ -350,21 +350,25 @@ class ApfContainer(widgets.Container):
             return None
 
         collision_radius = self._repulsive_radius_slider.value
-        repulsive_field = np.zeros_like(self._distance_field)
-        valid_indices = (self._distance_field <= collision_radius) & (
-            self._distance_field > 0
-        )
-        repulsive_field[valid_indices] = (
-            0.5
-            * (
-                (collision_radius - self._distance_field[valid_indices])
-                / (collision_radius * self._distance_field[valid_indices])
-            )
-            ** 2
-        )
-        repulsive_field = np.where(
-            self._distance_field > 0, repulsive_field, 1e20
-        )
+        # repulsive_field = np.zeros_like(self._distance_field)
+        # valid_indices = (self._distance_field <= collision_radius) & (
+            # self._distance_field > 0
+        # )
+        # repulsive_field[valid_indices] = (
+        #     0.5
+        #     * (
+        #         (collision_radius - self._distance_field[valid_indices])
+        #         / (collision_radius * self._distance_field[valid_indices])
+        #     )
+        #     ** 2
+        # )
+        # repulsive_field = np.where(
+        #     self._distance_field > 0, repulsive_field, 1e20
+        # )
+
+        repulsive_field = np.ones(self._distance_field) * np.infty
+        repulsive_field[self._distance_field > collision_radius] = 0
+
         ratio = self._ratio_slider.value
         artificial_potential_field = (
             (1 - ratio) * self._attractive_field

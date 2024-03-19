@@ -225,12 +225,33 @@ class FreeNavigationSimulation(NavigationSimulation):
     @ti.kernel
     def step(self, t: int):
         for n in ti.ndrange(self._nb_walkers):
-            self._positions[n, t] = (
-                self._positions[n, t - 1]
-                + self._dt * self.vector_field.at(self._positions[n, t - 1])
-                + tm.sqrt(2 * self._dim * self._dt * self.diffusivity)
-                * self._noise[n, t]
-            )
+
+            # self._positions[n, t] = (
+            #     self._positions[n, t - 1]
+            #     + self._dt * self.vector_field.at(self._positions[n, t - 1])
+            #     + tm.sqrt(2 * self._dim * self._dt * self.diffusivity)
+            #     * self._noise[n, t]
+            # )
+
+            dr    = self._dt
+            phi   = 2 * np.pi * ti.random(float)
+            theta = 2 * np.pi * ti.random(float)
+
+            attempt = self._positions[n,t-1]  
+            attempt.xyz = attempt.x + dr * np.sin(theta) * np.cos(phi), \
+                          attempt.y + dr * np.sin(theta) * np.sin(phi), \
+                          attempt.z + dr * np.cos(theta)
+            
+            beta = 1.
+            P_MCMC = np.min( 1., np.exp(-beta * self.vector_field(attempt)))
+            p = ti.random(float) # uniform reference
+            if p <= P_MCMC:
+                self._positions[n,t] = attempt 
+            else: 
+                self._positions[n,t] = self._positions[n,t-1]
+            
+
+
             self.collision_handling(n, t)
 
     @ti.func

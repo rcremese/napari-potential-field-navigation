@@ -62,11 +62,11 @@ class SampledField(ABC):
 
     @abstractmethod
     @ti.func
-    def at(self, pos: ti.template()) -> ti.template():
+    def at(self, pos: ti.template) -> ti.template:
         raise NotImplementedError
 
     @ti.func
-    def contains(self, pos: ti.template()) -> bool:
+    def contains(self, pos: ti.template) -> bool:
         return self._bounds.contains(pos)
 
     @property
@@ -114,7 +114,7 @@ class SampledField(ABC):
         return np.meshgrid(*self.linspace, indexing="ij")
 
     ## Dunder method
-    def __getitem__(self, idx: ti.template()) -> float:
+    def __getitem__(self, idx: ti.template) -> float:
         return self._values[idx]
 
 
@@ -133,7 +133,7 @@ class SampledField2D(SampledField):
         self.ndim = 2
 
     @ti.func
-    def at(self, pos: ti.template()) -> ti.template():
+    def at(self, pos: ti.template) -> ti.template:
         idx = tm.ivec2([0, 0])
         toi = tm.vec2([0, 0])
         for i in ti.static(range(2)):
@@ -266,7 +266,7 @@ class SampledField3D(SampledField):
         self.ndim = 3
 
     @ti.func
-    def at(self, pos: ti.template()) -> ti.template():
+    def at(self, pos: ti.template) -> ti.template:
         idx = tm.ivec3([0, 0, 0])
         toi = tm.vec3([0, 0, 0])
         for i in ti.static(range(3)):
