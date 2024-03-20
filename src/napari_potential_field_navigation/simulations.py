@@ -234,16 +234,28 @@ class FreeNavigationSimulation(NavigationSimulation):
             # )
 
             dr    = self._dt
-            phi   = 2 * np.pi * ti.random(float)
-            theta = 2 * np.pi * ti.random(float)
+            attempt = self._positions[n,t-1] 
 
-            attempt = self._positions[n,t-1]  
+            ########################## UNIFORM #########################
+
+            phi   = 2 * np.pi * ti.random(float) #this is probably too random
+            theta = 2 * np.pi * ti.random(float) 
+
+            ######################### GAUSSIAN #########################
+
+            phi   = np.sign(attempt.y) * np.arccos(attempt.x / (attempt.x**2 + attempt.y**2)**0.5) + ti.randn()
+            theta = np.arccos(attempt.z / (attempt.x**2 + attempt.y**2 + attempt.z**2)**0.5)       + ti.randn()
+
+
             attempt.xyz = attempt.x + dr * np.sin(theta) * np.cos(phi), \
                           attempt.y + dr * np.sin(theta) * np.sin(phi), \
                           attempt.z + dr * np.cos(theta)
             
+      
+            
+
             beta = 1.
-            P_MCMC = np.min( 1., np.exp(-beta * self.vector_field(attempt)))
+            P_MCMC = np.min( 1., np.exp(-beta * self.vector_field.at(attempt)))
             p = ti.random(float) # uniform reference
             if p <= P_MCMC:
                 self._positions[n,t] = attempt 

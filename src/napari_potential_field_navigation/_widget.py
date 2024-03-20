@@ -338,7 +338,7 @@ class ApfContainer(widgets.Container):
                 ]
             ),
             axis=0,
-        )**2
+        )**(2)
         return attractive_field
 
     @property
