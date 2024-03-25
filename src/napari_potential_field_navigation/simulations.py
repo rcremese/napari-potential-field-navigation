@@ -163,6 +163,14 @@ class FreeNavigationSimulation(NavigationSimulation):
             needs_grad=False,
         )
 
+    def reset(self):
+        if self._dim == 2:
+            self._reset_2d()
+        elif self._dim == 3:
+            self._reset_3d()
+        else:
+            raise ValueError("Simulation dimension must be either 2 or 3")
+
     def run(self):
         for t in range(1, self._nb_steps):
             self.step(t)
@@ -185,23 +193,26 @@ class FreeNavigationSimulation(NavigationSimulation):
             ), f"Expected clip_value to be a positive float. Get {clip_value}"
             clip_value = float(clip_value)
 
-        for iter in range(max_iter):
-            self.reset()
-            with ti.ad.Tape(self.loss):
-                self.run()
-                self.compute_loss(self._nb_steps - 1)
-            print("Iter=", iter, "Loss=", self.loss[None])
-            self._update_force_field(lr)
-            if clip_value > 0.0:
-                self.vector_field.norm_clip(clip_value)
+        for i in range(max_iter):
+            self._optimization_step(clip_value, lr)
+            print("Iter=", i, "Loss=", self.loss[None])
+            # self.reset()
+            # with ti.ad.Tape(self.loss):
+            #     self.run()
+            #     self.compute_loss(self._nb_steps - 1)
+            # self._update_force_field(lr)
+            # if clip_value > 0.0:
+            #     self.vector_field.norm_clip(clip_value)
 
-    def reset(self):
-        if self._dim == 2:
-            self._reset_2d()
-        elif self._dim == 3:
-            self._reset_3d()
-        else:
-            raise ValueError("Simulation dimension must be either 2 or 3")
+    def _optimization_step(self, clip_value: float, lr: float):
+        self.reset()
+        with ti.ad.Tape(self.loss):
+            self.run()
+            self.compute_loss(self._nb_steps - 1)
+        print("Iter=", iter, "Loss=", self.loss[None])
+        self._update_force_field(lr)
+        if clip_value > 0.0:
+            self.vector_field.norm_clip(clip_value)
 
     ### Taichi kernels
     @ti.kernel
