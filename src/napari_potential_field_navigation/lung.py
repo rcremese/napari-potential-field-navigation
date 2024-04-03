@@ -3,6 +3,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import scipy.sparse as sp
 import scipy.sparse.linalg as splinalg
+import scipy.ndimage as ndi
 import numpy as np
 import napari
 import time
@@ -79,7 +80,9 @@ def main():
     itk_label = itk.imread(label_path)
 
     steps = itk_label["spacing"]
-    label = itk.array_view_from_image(itk_label)
+    label_view = itk.array_view_from_image(itk_label)
+    label = label_view[ndi.find_objects(label_view)[0]]
+
     res = label.shape
     print(f"Res: {res}, Steps: {steps}")
 
@@ -90,7 +93,8 @@ def main():
 
     print(f"Laplacian matrix creation: {toc - tic:.2f} seconds")
 
-    valid_idx = label.flatten() > 0
+    frontier = ndi.binary_dilation(label, iterations=1) & ~label
+    valid_idx = (label.flatten() > 0) | (frontier.flatten() > 0)
     tic = time.perf_counter()
 
     restricted_laplace_mat = laplace_mat[valid_idx, :][:, valid_idx]
@@ -103,12 +107,13 @@ def main():
     toc = time.perf_counter()
     print(f"Restricted laplacian matrix creation: {toc - tic:.2f} seconds")
     source = np.zeros_like(label)
-    source[:, :, -1] = 10
+    source[frontier.flatten()] = 100
+    source[-1, :, :] = 1
     b = source.flatten()[valid_idx]
     print(b.sum())
 
     tic = time.perf_counter()
-    x, info = splinalg.cg(restricted_laplace_mat, -b, maxiter=1000)
+    x, info = splinalg.cg(restricted_laplace_mat, b, maxiter=1000)
     tac = time.perf_counter()
     print(f"CG solve: {tac - tic:.2f} seconds")
     print(f"CG info: {info}")
@@ -118,14 +123,15 @@ def main():
     solution = solution.reshape(res)
 
     fig, ax = plt.subplots(1, 3, figsize=(10, 10))
-    ax[0].imshow(itk_label[0, :, :, -1], cmap="gray")
+    ax[0].imshow(label[-1, :, :], cmap="gray")
     ax[0].plot(53, 128, "ro")
-    ax[1].imshow(restricted_laplace_mat[:1000, :1000].todense())
-    ax[2].imshow(solution[:, :, -10], cmap="inferno")
+    # ax[1].imshow(restricted_laplace_mat[:1000, :1000].todense())
+    ax[1].imshow(frontier[-1, :, :], cmap="gray")
+    ax[2].imshow(solution[-1, :, :], cmap="inferno")
     plt.show()
 
     viewer = napari.view_labels(
-        np.array(itk_label[0], dtype=int), name="label", scale=steps
+        np.array(label, dtype=int), name="label", scale=steps
     )
     viewer.add_image(
         solution, name="solution", colormap="inferno", scale=steps
