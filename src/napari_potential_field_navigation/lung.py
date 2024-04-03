@@ -1,13 +1,4 @@
-from monai.transforms import (
-    LoadImage,
-    CropForeground,
-    Resize,
-    LabelToContour,
-    distance_transform_edt,
-    Compose,
-    KeepLargestConnectedComponent,
-)
-
+import itk
 from pathlib import Path
 import matplotlib.pyplot as plt
 import scipy.sparse as sp
@@ -85,42 +76,34 @@ def main():
         .joinpath("sample_datas", "label.nii.gz")
         .resolve(strict=True)
     )
+    itk_label = itk.imread(label_path)
 
-    label = LoadImage(ensure_channel_first=True)(label_path)
-    transforms = Compose(
-        [
-            CropForeground(),
-            # Resize(spatial_size=(128, 128, 128)),
-            # KeepLargestConnectedComponent(applied_labels=[1]),
-        ]
-    )
-    label = transforms(label)
-
-    res = label.shape[1:]
-    steps = np.diag(label.affine)[:-1]
+    steps = itk_label["spacing"]
+    label = itk.array_view_from_image(itk_label)
+    res = label.shape
     print(f"Res: {res}, Steps: {steps}")
 
     tic = time.perf_counter()
     laplace_mat = create_laplacian_matrix_3d(*res, *steps)
-    Gx, Gy, Gz = create_gradient_matrix_3d(*res, *steps)
+    # Gx, Gy, Gz = create_gradient_matrix_3d(*res, *steps)
     toc = time.perf_counter()
 
     print(f"Laplacian matrix creation: {toc - tic:.2f} seconds")
 
-    valid_idx = label[0].flatten() > 0
+    valid_idx = label.flatten() > 0
     tic = time.perf_counter()
 
     restricted_laplace_mat = laplace_mat[valid_idx, :][:, valid_idx]
-    restricted_Gx = Gx[valid_idx, :][:, valid_idx]
-    restricted_Gy = Gy[valid_idx, :][:, valid_idx]
-    restricted_Gz = Gz[valid_idx, :][:, valid_idx]
+    # restricted_Gx = Gx[valid_idx, :][:, valid_idx]
+    # restricted_Gy = Gy[valid_idx, :][:, valid_idx]
+    # restricted_Gz = Gz[valid_idx, :][:, valid_idx]
     print(restricted_laplace_mat.shape, restricted_laplace_mat.dtype)
-    print(restricted_Gx.shape, restricted_Gx.dtype)
+    # print(restricted_Gx.shape, restricted_Gx.dtype)
 
     toc = time.perf_counter()
     print(f"Restricted laplacian matrix creation: {toc - tic:.2f} seconds")
-    source = np.zeros_like(label[0])
-    source[:, :, -1] = 20
+    source = np.zeros_like(label)
+    source[:, :, -1] = 10
     b = source.flatten()[valid_idx]
     print(b.sum())
 
@@ -130,19 +113,19 @@ def main():
     print(f"CG solve: {tac - tic:.2f} seconds")
     print(f"CG info: {info}")
 
-    solution = np.zeros_like(label[0]).flatten()
+    solution = np.zeros_like(label).flatten()
     solution[valid_idx] = x
-    solution = solution.reshape(label[0].shape)
+    solution = solution.reshape(res)
 
     fig, ax = plt.subplots(1, 3, figsize=(10, 10))
-    ax[0].imshow(label[0, :, :, -1], cmap="gray")
+    ax[0].imshow(itk_label[0, :, :, -1], cmap="gray")
     ax[0].plot(53, 128, "ro")
     ax[1].imshow(restricted_laplace_mat[:1000, :1000].todense())
     ax[2].imshow(solution[:, :, -10], cmap="inferno")
     plt.show()
 
     viewer = napari.view_labels(
-        np.array(label[0], dtype=int), name="label", scale=steps
+        np.array(itk_label[0], dtype=int), name="label", scale=steps
     )
     viewer.add_image(
         solution, name="solution", colormap="inferno", scale=steps
@@ -255,4 +238,4 @@ def animate_autodiff_process():
 
 
 if __name__ == "__main__":
-    animate_autodiff_process()
+    main()
