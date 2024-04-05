@@ -18,6 +18,33 @@ from napari_potential_field_navigation.geometries import Box2D
 from napari_potential_field_navigation.fields import VectorField2D
 
 
+def setcsrrow2id(matrix: sp.spmatrix, rowind: int):
+    indptr = matrix.indptr
+    values = matrix.data
+    indxs = matrix.indices
+
+    # get the range of the data that is changed
+    rowpa = indptr[rowind]
+    rowpb = indptr[rowind + 1]
+
+    # new value and its new rowindex
+    values[rowpa] = 1.0
+    indxs[rowpa] = rowind
+
+    # number of new zero values
+    diffvals = rowpb - rowpa - 1
+
+    # filter the data and indices and adjust the range
+    values = np.r_[values[: rowpa + 1], values[rowpb:]]
+    indxs = np.r_[indxs[: rowpa + 1], indxs[rowpb:]]
+    indptr = np.r_[indptr[: rowind + 1], indptr[rowind + 1 :] - diffvals]
+
+    # hard set the new sparse data
+    matrix.indptr = indptr
+    matrix.data = values
+    matrix.indices = indxs
+
+
 def create_laplacian_matrix_2d(
     nx: int, ny: int, dx: float, dy: float
 ) -> sp.lil_array:
@@ -81,6 +108,7 @@ def main():
 
     steps = itk_label["spacing"]
     label_view = itk.array_view_from_image(itk_label)
+    # label = label_view[ndi.find_objects(ndi.binary_dilation(label_view))[0]]
     label = label_view[ndi.find_objects(label_view)[0]]
 
     res = label.shape
@@ -93,11 +121,28 @@ def main():
 
     print(f"Laplacian matrix creation: {toc - tic:.2f} seconds")
 
-    frontier = ndi.binary_dilation(label, iterations=1) & ~label
-    valid_idx = (label.flatten() > 0) | (frontier.flatten() > 0)
+    frontier: np.ndarray = ndi.binary_dilation(label, iterations=1) & ~label
+    # valid_idx = (label.flat > 0) | (frontier.flat > 0)
+    valid_idx = label.flat > 0
+
+    source = np.zeros_like(label, dtype=np.float64)
+    source[-2, 53, 128] = 1e5
+    # source.flat[frontier.flat > 0] = 100
+    b = source.flat[valid_idx]
+    non_zero_idx = np.nonzero(b)[0]
+    source_mask = b > 0
+
     tic = time.perf_counter()
 
     restricted_laplace_mat = laplace_mat[valid_idx, :][:, valid_idx]
+    restricted_laplace_mat[source_mask] = 0
+    restricted_laplace_mat[source_mask, source_mask] = 1
+    restricted_laplace_mat.eliminate_zeros()
+    # for index in non_zero_idx:
+    #     setcsrrow2id(restricted_laplace_mat, index)
+
+    # restricted_laplace_mat[source_mask] = 0
+    # restricted_laplace_mat[source_mask, source_mask] = 1
     # restricted_Gx = Gx[valid_idx, :][:, valid_idx]
     # restricted_Gy = Gy[valid_idx, :][:, valid_idx]
     # restricted_Gz = Gz[valid_idx, :][:, valid_idx]
@@ -106,28 +151,28 @@ def main():
 
     toc = time.perf_counter()
     print(f"Restricted laplacian matrix creation: {toc - tic:.2f} seconds")
-    source = np.zeros_like(label)
-    source[frontier.flatten()] = 100
-    source[-1, :, :] = 1
-    b = source.flatten()[valid_idx]
-    print(b.sum())
 
     tic = time.perf_counter()
-    x, info = splinalg.cg(restricted_laplace_mat, b, maxiter=1000)
+    # x, info = splinalg.cg(restricted_laplace_mat, b, maxiter=1000)
+    x = splinalg.spsolve(restricted_laplace_mat, b)
     tac = time.perf_counter()
     print(f"CG solve: {tac - tic:.2f} seconds")
-    print(f"CG info: {info}")
+    # print(f"CG info: {info}")
 
-    solution = np.zeros_like(label).flatten()
-    solution[valid_idx] = x
+    solution = np.zeros_like(label)
+    solution.flat[valid_idx] = x
     solution = solution.reshape(res)
 
+    laplace_mask = ndi.binary_dilation(source_mask, iterations=100)
+    print(laplace_mask.sum())
     fig, ax = plt.subplots(1, 3, figsize=(10, 10))
-    ax[0].imshow(label[-1, :, :], cmap="gray")
-    ax[0].plot(53, 128, "ro")
-    # ax[1].imshow(restricted_laplace_mat[:1000, :1000].todense())
-    ax[1].imshow(frontier[-1, :, :], cmap="gray")
-    ax[2].imshow(solution[-1, :, :], cmap="inferno")
+    ax[0].imshow(label[-2, :, :], cmap="gray")
+    ax[0].plot(128, 53, "ro")
+    ax[1].imshow(
+        restricted_laplace_mat[laplace_mask][:, laplace_mask].todense()
+    )
+    # ax[1].imshow(frontier[-1, :, :], cmap="gray")
+    ax[2].imshow(solution[-2, :, :], cmap="inferno")
     plt.show()
 
     viewer = napari.view_labels(
