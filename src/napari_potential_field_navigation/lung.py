@@ -122,12 +122,12 @@ def main():
     print(f"Laplacian matrix creation: {toc - tic:.2f} seconds")
 
     frontier: np.ndarray = ndi.binary_dilation(label, iterations=1) & ~label
-    # valid_idx = (label.flat > 0) | (frontier.flat > 0)
-    valid_idx = label.flat > 0
+    valid_idx = (label.flat > 0) | (frontier.flat > 0)
+    # valid_idx = label.flat > 0
 
     source = np.zeros_like(label, dtype=np.float64)
-    source[-2, 53, 128] = 1e5
-    # source.flat[frontier.flat > 0] = 100
+    source[-2, 53, 128] = 0
+    source.flat[frontier.flat > 0] = 100
     b = source.flat[valid_idx]
     non_zero_idx = np.nonzero(b)[0]
     source_mask = b > 0

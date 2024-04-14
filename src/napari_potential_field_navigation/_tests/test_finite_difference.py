@@ -29,3 +29,4 @@ def test_poisson_solve_2D():
     dist = np.sqrt((X - 5) ** 2 + (Y - 5) ** 2)
     green_fct = 0.5 * np.log(dist) / np.pi
     assert np.allclose(u, green_fct)
+
