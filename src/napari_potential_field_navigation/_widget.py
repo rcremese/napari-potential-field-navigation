@@ -17,6 +17,7 @@ from napari_potential_field_navigation.geometries import Box3D
 from napari_potential_field_navigation.simulations import (
     FreeNavigationSimulation,
 )
+import csv
 
 if TYPE_CHECKING:
     import napari
@@ -427,6 +428,10 @@ class SimulationContainer(Container):
             ],
             layout="horizontal",
         )
+        self._exporter = widgets.FileEdit(
+            label="Export trajectories", mode="w"
+        )
+        self._exporter.changed.connect(self._export_trajectories)
 
         self.extend(
             [
@@ -436,6 +441,7 @@ class SimulationContainer(Container):
                 self._speed_slider,
                 self._diffusivity_slider,
                 button_container,
+                self._exporter,
             ]
         )
         ## Optimization widgets
@@ -486,6 +492,28 @@ class SimulationContainer(Container):
             self.simulation.trajectories,
             name=name.capitalize(),
         )
+        return True
+
+    def _export_trajectories(self):
+        if self.simulation is None:
+            notifications.show_error("The simulation is not initialized.")
+            return False
+        if self._exporter.value == "":
+            notifications.show_error("No filename provided.")
+            return False
+
+        trajectories = self.simulation.trajectories
+        offset = np.array(self._viewer.layers["Label"].translate)
+        traj_ids = np.array(trajectories[:, 0], dtype=int)
+        frame_ind = np.array(trajectories[:, 1], dtype=int)
+        positions = np.array(trajectories[:, 2:]) - offset
+        with open(self._exporter.value, "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(
+                ["trajectory id", "frame index", "x", "y", "z"]
+            )  # adjust this to match your data structure
+            for traj, frame, pos in zip(traj_ids, frame_ind, positions):
+                writer.writerow([traj, frame, *pos])
         return True
 
     # def _update_simulation(self) -> bool:
