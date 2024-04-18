@@ -9,9 +9,13 @@ from napari.qt.threading import thread_worker
 import taichi as ti
 
 from napari_potential_field_navigation.fields import ScalarField3D
-from napari_potential_field_navigation.geometries import Box3D
+from napari_potential_field_navigation.geometries import (
+    Box3D,
+    convert_binary_map_to_obstacles,
+)
 from napari_potential_field_navigation.simulations import (
     FreeNavigationSimulation,
+    ClutteredNavigationSimulation,
 )
 
 if TYPE_CHECKING:
@@ -198,22 +202,19 @@ class ApfContainer(widgets.Container):
         super().__init__()
         self._viewer = viewer
 
-        self._ratio_slider = widgets.FloatSlider(
-            min=0, max=1, value=0.5, label="Attractive / Repulsive ratio"
-        )
         self._resolution_combobox = widgets.ComboBox(
             label="Potential field resolution",
             choices=["1x", "2x", "4x", "8x", "16x"],
             value="1x",
         )
-        # self._attractive_weight_slider = widgets.FloatSlider(
-        #     min=1,
-        #     max=1000,
-        #     step=1,
-        #     value=1,
-        #     label="Attractive weight (unit)",
-        # )
-        # self._attractive_weight_slider.changed.connect(self._plot_apf)
+        self._attractive_weight_slider = widgets.FloatSlider(
+            min=1,
+            max=1000,
+            step=1,
+            value=1,
+            label="Attractive weight (unit)",
+        )
+        self._attractive_weight_slider.changed.connect(self._plot_apf)
         self._repulsive_weight_slider = widgets.FloatSlider(
             min=1,
             max=1000,
@@ -228,9 +229,8 @@ class ApfContainer(widgets.Container):
         self._weight_container = widgets.Container(
             widgets=[
                 widgets.Label(label="APF parameters"),
-                self._ratio_slider,
                 self._resolution_combobox,
-                # self._attractive_weight_slider,
+                self._attractive_weight_slider,
                 self._repulsive_weight_slider,
                 self._repulsive_radius_slider,
             ],
@@ -365,10 +365,9 @@ class ApfContainer(widgets.Container):
         repulsive_field = np.where(
             self._distance_field > 0, repulsive_field, 1e20
         )
-        ratio = self._ratio_slider.value
         artificial_potential_field = (
-            (1 - ratio) * self._attractive_field
-            + self._repulsive_weight_slider.value * ratio * repulsive_field
+            self._repulsive_weight_slider.value * self._attractive_field
+            + self._repulsive_weight_slider.value * repulsive_field
         )
         return ScalarField3D(artificial_potential_field, self._bounds)
 
@@ -517,6 +516,7 @@ class SimulationContainer(widgets.Container):
                 "No label found. Please select a label file before running the simulation."
             )
             return False
+        label_layer = self._viewer.layers["Label"]
 
         if "Initial positions" not in self._viewer.layers:
             notifications.show_error(
@@ -536,6 +536,13 @@ class SimulationContainer(widgets.Container):
             return False
         goal = self._viewer.layers["Goal"].data[0]
         assert goal.shape == (3,), "Goal position must be a 3D vector"
+        # frontier: np.ndarray = (
+        #     ndi.binary_dilation(label_layer.data, iterations=1)
+        #     & ~label_layer.data
+        # )
+        # obstacles = convert_binary_map_to_obstacles(
+        #     frontier, origin=label_layer.translate, scale=label_layer.scale
+        # )
 
         self.simulation = FreeNavigationSimulation(
             initial_positions,
@@ -554,7 +561,9 @@ class SimulationContainer(widgets.Container):
             )
             return False
         self.simulation.optimize(
-            max_iter=self._nb_epochs_box.value, lr=self._lr_slider.value
+            max_iter=self._nb_epochs_box.value,
+            lr=self._lr_slider.value,
+            clip_value=self._speed_slider.value,
         )
         self._plot_trajectories("Optimized trajectories")
         return True
@@ -580,45 +589,6 @@ class SimulationContainer(widgets.Container):
         return self._diffusivity_slider.value
 
 
-class OptimizationContainer(widgets.Container):
-    def __init__(
-        self, viewer: "napari.viewer.Viewer", sim_widget: SimulationContainer
-    ):
-        super().__init__(layout="horizontal")
-        self._viewer = viewer
-        self._sim_widget = sim_widget
-        ## Optimization widgets
-        self._nb_epochs_box = widgets.SpinBox(
-            label="Epochs", min=1, max=1000, step=10, value=100
-        )
-        self._lr_slider = widgets.FloatSpinBox(
-            min=0.001, max=10, value=0.1, label="Learning rate"
-        )
-
-        self._run_optimization_button = widgets.PushButton(
-            text="Run optimization"
-        )
-        self._run_optimization_button.changed.connect(self._run_optimization)
-        param_container = widgets.Container(
-            widgets=[
-                widgets.Label(label="Optimization parameters"),
-                self._nb_epochs_box,
-                self._lr_slider,
-            ],
-        )
-
-        self.extend(
-            [
-                param_container,
-                self._run_optimization_button,
-            ]
-        )
-
-    def _run_optimization(self):
-        notifications.show_info(f"nb_agents = {self._sim_widget.nb_agents}")
-        raise NotImplementedError
-
-
 class DiffApfWidget(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
@@ -634,15 +604,11 @@ class DiffApfWidget(widgets.Container):
         self._simulation_container = SimulationContainer(
             self._viewer, self._apf_container
         )
-        self._optimization_container = OptimizationContainer(
-            self._viewer, self._simulation_container
-        )
         self.extend(
             [
                 self._io_container,
                 self._point_container,
                 self._apf_container,
                 self._simulation_container,
-                # self._optimization_container,
             ]
         )

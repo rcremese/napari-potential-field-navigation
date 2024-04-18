@@ -190,8 +190,8 @@ class FreeNavigationSimulation(NavigationSimulation):
             with ti.ad.Tape(self.loss):
                 self.run()
                 self.compute_loss(self._nb_steps - 1)
-            print("Iter=", iter, "Loss=", self.loss[None])
-            self._update_force_field(lr)
+            # print("Iter=", iter, "Loss=", self.loss[None])
+            self._update_force_field(lr, clip_value)
             if clip_value > 0.0:
                 self.vector_field.norm_clip(clip_value)
 
@@ -268,11 +268,13 @@ class FreeNavigationSimulation(NavigationSimulation):
                 self._positions[n, t][i] = self.vector_field._bounds.max[i]
 
     @ti.kernel
-    def _update_force_field(self, lr: float):
+    def _update_force_field(self, lr: float, clip_value: float):
         for I in ti.grouped(self.vector_field._values):
-            self.vector_field._values[I] -= (
-                lr * self.vector_field._values.grad[I]
-            )
+            grad = self.vector_field._values.grad[I]
+            # Clip the value of the gradient if needed
+            if clip_value > 0.0 and tm.length(grad) > clip_value:
+                grad *= clip_value / tm.length(grad)
+            self.vector_field._values[I] -= lr * grad
 
     ## Properties
     @property
@@ -311,7 +313,7 @@ class FreeNavigationSimulation(NavigationSimulation):
         return self._dim
 
 
-class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
+class ClutteredNavigationSimulation(FreeNavigationSimulation):
     def __init__(
         self,
         positions: np.ndarray,
@@ -322,7 +324,9 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
         dt: float = 0.1,
         diffusivity: float = 1,
     ):
-        super().__init__(positions, vector_field, t_max, dt, diffusivity)
+        super().__init__(
+            positions, target, vector_field, t_max, dt, diffusivity
+        )
         # Initialisation of the obstacles
         if not isinstance(obstacles, (list, tuple)):
             raise TypeError(
@@ -350,38 +354,93 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
 
     def collision_handling(self, n: int, t: int):
         super().collision_handling(n, t)
+        bounding_box = geometries.Box3D(
+            min=self._positions[n, t - 1], max=self._positions[n, t]
+        )
         for o in ti.ndrange(self.nb_obstacles):
-            if self._obstacles[o].contains(self._positions[n, t]):
+            if self._obstacles[o].collides_with(bounding_box):
                 self._obstacle_collision(n, t, o)
 
     @ti.func
     def _obstacle_collision(self, n: int, t: int, o: int):
-        for i in ti.static(range(self._dim)):
-            ## Collision on the min border
-            if (self._positions[n, t - 1][i] < self._obstacles[o].min[i]) and (
-                self._positions[n, t][i] >= self._obstacles[o].min[i]
-            ):
-                toi = (
-                    self._obstacles[o].min[i] - self._positions[n, t - 1][i]
-                ) / (self._positions[n, t][i] - self._positions[n, t - 1][i])
-                self._positions[n, t][i] = lerp(
-                    self._positions[n, t - 1][i], self._positions[n, t][i], toi
-                ) - ti.abs(
-                    self._obstacles[o].min[i] - self._positions[n, t][i]
-                )
+        new_pos = self._line_box_intersection(
+            self._positions[n, t - 1],
+            self._positions[n, t],
+            self._obstacles[o],
+        )
+        if new_pos is not None:
+            self._positions[n, t] = new_pos
 
-            ## Collision on the max border
-            elif (
-                self._positions[n, t - 1][i] > self._obstacles[o].max[i]
-            ) and (self._positions[n, t][i] <= self._obstacles[o].max[i]):
-                toi = (
-                    self._obstacles[o].max[i] - self._positions[n, t - 1][i]
-                ) / (self._positions[n, t][i] - self._positions[n, t - 1][i])
-                self._positions[n, t][i] = lerp(
-                    self._positions[n, t - 1][i], self._positions[n, t][i], toi
-                ) + ti.abs(
-                    self._obstacles[o].max[i] - self._positions[n, t][i]
-                )
+        # for i in ti.static(range(self._dim)):
+        #     ## Collision on the min border
+        #     if (self._positions[n, t - 1][i] < self._obstacles[o].min[i]) and (
+        #         self._positions[n, t][i] >= self._obstacles[o].min[i]
+        #     ):
+        #         toi = (
+        #             self._obstacles[o].min[i] - self._positions[n, t - 1][i]
+        #         ) / (self._positions[n, t][i] - self._positions[n, t - 1][i])
+        #         self._positions[n, t][i] = lerp(
+        #             self._positions[n, t - 1][i], self._positions[n, t][i], toi
+        #         ) - ti.abs(
+        #             self._obstacles[o].min[i] - self._positions[n, t][i]
+        #         )
+
+        #     ## Collision on the max border
+        #     elif (
+        #         self._positions[n, t - 1][i] > self._obstacles[o].max[i]
+        #     ) and (self._positions[n, t][i] <= self._obstacles[o].max[i]):
+        #         toi = (
+        #             self._obstacles[o].max[i] - self._positions[n, t - 1][i]
+        #         ) / (self._positions[n, t][i] - self._positions[n, t - 1][i])
+        #         self._positions[n, t][i] = lerp(
+        #             self._positions[n, t - 1][i], self._positions[n, t][i], toi
+        #         ) + ti.abs(
+        #             self._obstacles[o].max[i] - self._positions[n, t][i]
+        #         )
+
+    @ti.func
+    def _line_box_intersection(line_start, line_end, box):
+        tmin = (
+            (box.min[0] - line_start[0]) / (line_end[0] - line_start[0])
+            if line_end[0] - line_start[0] != 0
+            else float("-inf")
+        )
+        tmax = (
+            (box.max[0] - line_start[0]) / (line_end[0] - line_start[0])
+            if line_end[0] - line_start[0] != 0
+            else float("inf")
+        )
+
+        if tmin > tmax:
+            tmin, tmax = tmax, tmin
+
+        for i in range(1, 3):
+            t1 = (
+                (box.min[i] - line_start[i]) / (line_end[i] - line_start[i])
+                if line_end[i] - line_start[i] != 0
+                else float("-inf")
+            )
+            t2 = (
+                (box.max[i] - line_start[i]) / (line_end[i] - line_start[i])
+                if line_end[i] - line_start[i] != 0
+                else float("inf")
+            )
+
+            if t1 > t2:
+                t1, t2 = t2, t1
+
+            if (tmin > t2) or (t1 > tmax):
+                return None
+
+            tmin = max(tmin, t1)
+            tmax = min(tmax, t2)
+
+        if 0 <= tmin <= 1:
+            return line_start + tmin * (line_end - line_start)
+        elif 0 <= tmax <= 1:
+            return line_start + tmax * (line_end - line_start)
+
+        return None
 
 
 if __name__ == "__main__":
