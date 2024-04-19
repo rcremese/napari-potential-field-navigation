@@ -114,11 +114,13 @@ class IoContainer(Container):
         self._viewer.layers["Label"].data = self._viewer.layers["Label"].data[
             slices[0]
         ]
+        ## TODO : uncomment to get the image at the right resolution
         self._viewer.layers["Label"].translate = new_origin
         if "Image" in self._viewer.layers:
             self._viewer.layers["Image"].data = self._viewer.layers[
                 "Image"
             ].data[slices[0]]
+            ## TODO : uncomment to get the image at the right resolution
             self._viewer.layers["Image"].translate = new_origin
 
     def _lock(self):
@@ -503,17 +505,20 @@ class SimulationContainer(Container):
             return False
 
         trajectories = self.simulation.trajectories
-        offset = np.array(self._viewer.layers["Label"].translate)
+        label_layer = self._viewer.layers["Label"]
+
         traj_ids = np.array(trajectories[:, 0], dtype=int)
         frame_ind = np.array(trajectories[:, 1], dtype=int)
-        positions = np.array(trajectories[:, 2:]) - offset
+        positions = (
+            np.array(trajectories[:, 2:]) - label_layer.metadata["origin"]
+        ) / label_layer.metadata["spacing"]
         with open(self._exporter.value, "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(
                 ["trajectory id", "frame index", "x", "y", "z"]
             )  # adjust this to match your data structure
             for traj, frame, pos in zip(traj_ids, frame_ind, positions):
-                writer.writerow([traj, frame, *pos])
+                writer.writerow([traj, frame, pos[2], pos[1], pos[0]])
         return True
 
     # def _update_simulation(self) -> bool:
