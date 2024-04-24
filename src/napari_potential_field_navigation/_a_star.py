@@ -26,20 +26,20 @@ def astar(
         binary_map.ndim == len(start) == len(goal)
     ), "Dimensions of the map, start and goal must be the same."
     ## Generate all possible l2 directions
-    directions = [
-        np.array(i)
-        for i in product([-1, 0, 1], repeat=binary_map.ndim)
-        if i != tuple([0] * binary_map.ndim)
-    ]
+    # directions = [
+    #     np.array(i)
+    #     for i in product([-1, 0, 1], repeat=binary_map.ndim)
+    #     if i != tuple([0] * binary_map.ndim)
+    # ]
 
     ## Generate all possible manhatan directions
-    # directions = np.array(
-    #     [
-    #         np.eye(binary_map.ndim, dtype=int)[i] * j
-    #         for i in range(binary_map.ndim)
-    #         for j in [-1, 1]
-    #     ]
-    # )
+    directions = np.array(
+        [
+            np.eye(binary_map.ndim, dtype=int)[i] * j
+            for i in range(binary_map.ndim)
+            for j in [-1, 1]
+        ]
+    )
     ## Initialize the open set, close set, came from, gscore, fscore and the heap
     close_set = set()
     came_from = {}

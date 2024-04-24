@@ -236,6 +236,12 @@ class VectorField2D(SampledField2D):
                     self._values[I] / tm.length(self._values[I]) * value
                 )
 
+    @ti.kernel
+    def normalize(self):
+        for I in ti.grouped(self._values):
+            if tm.length(self._values[I]) > 0:
+                self._values[I] = self._values[I] / tm.length(self._values[I])
+
     ## Dunder method
     def __repr__(self) -> str:
         return f"VectorField2D(values.shape={self._values.shape}, bounds={self._bounds})"
@@ -384,6 +390,12 @@ class VectorField3D(SampledField3D):
                     self._values[I] / tm.length(self._values[I]) * value
                 )
 
+    @ti.kernel
+    def normalize(self):
+        for I in ti.grouped(self._values):
+            if tm.length(self._values[I]) > 0:
+                self._values[I] = self._values[I] / tm.length(self._values[I])
+
     ## Dunder method
     def __repr__(self) -> str:
         return f"VectorField3D(values.shape={self._values.shape}, bounds={self._bounds})"
@@ -397,25 +409,6 @@ class VectorField3D(SampledField3D):
 
     def __neg__(self) -> "VectorField3D":
         return VectorField3D(-self.values, self._bounds)
-
-    # @property
-    # @ti.kernel
-    # def max(self) -> float:
-    #     max_val = -tm.inf
-    #     for I in ti.grouped(self._values):
-    #         max_val = ti.max(max_val, tm.length(self._values[I]))
-    #     return max_val
-
-    # def __repr__(self) -> str:
-    #     return f"VectorField(values={self._values.shape}, bounds={self._bounds}, extrapolation={self._extrapolation})"
-
-    # @ti.kernel
-    # def clip(self, value: float):
-    #     for I in ti.grouped(self._values):
-    #         if tm.length(self._values[I]) > value:
-    #             self._values[I] = (
-    #                 self._values[I] / tm.length(self._values[I]) * value
-    #             )
 
 
 class SampledFieldFactory:
