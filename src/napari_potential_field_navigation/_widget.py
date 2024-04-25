@@ -1,6 +1,10 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
+from enum import Enum
+from typing_extensions import Unpack
 
 import magicgui.widgets as widgets
+from magicgui.widgets.bases._widget import WidgetKwargs
 import napari.utils.notifications as notifications
 import numpy as np
 import scipy.ndimage as ndi
@@ -13,6 +17,10 @@ from napari.qt.threading import thread_worker
 import taichi as ti
 
 from napari_potential_field_navigation.fields import ScalarField3D
+from napari_potential_field_navigation._a_star import (
+    astar,
+    wavefront_generation,
+)
 from napari_potential_field_navigation.geometries import Box3D
 from napari_potential_field_navigation.simulations import (
     FreeNavigationSimulation,
@@ -21,6 +29,12 @@ import csv
 
 if TYPE_CHECKING:
     import napari
+
+
+class MethodSelection(Enum):
+    APF = "Artificial Potential Field"
+    WAVEFRONT = "Wavefront method"
+    A_STAR = "A*"
 
 
 class IoContainer(Container):
@@ -198,6 +212,118 @@ class PointContainer(Container):
         if self._position_layer is None:
             raise ValueError("No initial positions selected")
         return self._position_layer.data
+
+
+class InitFieldContainer(Container):
+    name: str
+
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__()
+        self._viewer = viewer
+
+        self.field: np.ma.MaskedArray = None
+
+    def compute(self):
+        raise NotImplementedError
+
+    def load(self, path: str | Path, quiet: TYPE_CHECKING = False) -> bool:
+        try:
+            path = Path(path).resolve(strict=True)
+        except FileNotFoundError:
+            notifications.show_error(
+                f"File {path} not found ! Please provide a valid path."
+            )
+            return False
+        with np.load(path) as data:
+            self.field = np.ma.masked_array(data["field"], mask=data["mask"])
+        return True
+
+    def save(self, path: str | Path, quiet: TYPE_CHECKING = False) -> None:
+        path = Path(path).resolve()
+        with path.open("wb") as file:
+            np.savez_compressed(
+                file,
+                field=self.field.data,
+                mask=self.field.mask,
+            )
+        return True
+
+    def visualize(self, plot_vectors=False) -> bool:
+        assert self.field.ndim == 3, "The field must be 3D"
+        assert isinstance(
+            self.field, np.ma.MaskedArray
+        ), "The field must be a masked array"
+        field = self.field
+
+        self._viewer.add_image(
+            np.where(field.mask, 0, field.data),
+            name=self.name.capitalize() + " field",
+            colormap="inferno",
+            scale=self._viewer.layers["Label"].scale,
+            translate=self._viewer.layers["Label"].translate,
+            metadata=self._viewer.layers["Label"].metadata,
+        )
+        ## If only the scalar field is requested return
+        if not plot_vectors:
+            return True
+
+        ## Code to plot also the vector field
+        # TODO : Add spatial information
+        x_max, y_max, z_max = field.shape
+        dx, dy, dz = np.gradient(field, edge_order=2)
+        dx.fill_value = dy.fill_value = dz.fill_value = 0.0
+        X, Y, Z = np.meshgrid(
+            np.arange(x_max), np.arange(y_max), np.arange(z_max), indexing="ij"
+        )
+        # Vector field representation
+        valid_map = ~(dx.mask | dy.mask | dz.mask)
+        # if downscale > 1:
+        #     downscale_map = np.zeros_like(field, dtype=bool)
+        #     downscale_map[::downscale, ::downscale, ::downscale] = True
+        #     valid_map = valid_map & downscale_map
+
+        data = np.zeros((valid_map.sum(), 2, 3))
+        data[:, 0, 0] = X[valid_map]
+        data[:, 0, 1] = Y[valid_map]
+        data[:, 0, 2] = Z[valid_map]
+        data[:, 1, 0] = -dx[valid_map]
+        data[:, 1, 1] = -dy[valid_map]
+        data[:, 1, 2] = -dz[valid_map]
+
+        self._viewer.add_vectors(
+            data,
+            ndim=3,
+            name="Vector field",
+            scale=self._viewer.layers["Label"].scale,
+            translate=self._viewer.layers["Label"].translate,
+            metadata=self._viewer.layers["Label"].metadata,
+        )
+
+
+class WavefrontContainer(InitFieldContainer):
+    name = "Wavefront"
+
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__()
+        self._viewer = viewer
+
+    def compute(self):
+        wavefront_generation(self._viewer.layers["Label"].data)
+
+
+class AStarContainer(Container):
+    name = "A*"
+
+    def __init__(self, viewer: "napari.viewer.Viewer"):
+        super().__init__()
+        self._viewer = viewer
+
+    def compute(self):
+        astar(
+            self._viewer.layers["Label"].data,
+            self._viewer.layers["Goal"].data[0],
+            self._viewer.layers["Initial positions"].data,
+        )
 
 
 class ApfContainer(Container):

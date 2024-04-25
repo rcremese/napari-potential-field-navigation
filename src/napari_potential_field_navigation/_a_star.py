@@ -86,6 +86,75 @@ def astar(
     return False
 
 
+def wavefront_generation(
+    binary_map: np.ndarray, goal: Tuple[int]
+) -> np.ma.masked_array:
+    # Generate all possible directions, including diagonals
+    directions = [
+        np.array(i)
+        for i in product([-1, 0, 1], repeat=binary_map.ndim)
+        if i != tuple([0] * binary_map.ndim)
+    ]
+
+    # Initialize the cost map with infinity
+    cost_map = np.ma.masked_array(
+        np.full(binary_map.shape, np.inf, dtype=np.float32),
+        mask=binary_map,
+    )
+    cost_map[goal] = 0
+
+    # Initialize the frontier with the goal
+    frontier = [goal]
+
+    while frontier:
+        current = frontier.pop(0)
+        for direction in directions:
+            neighbor = tuple(np.array(current) + direction)
+            if np.any(np.array(neighbor) < 0) or np.any(
+                np.array(neighbor) >= np.array(binary_map.shape)
+            ):
+                continue
+            if cost_map.mask[neighbor]:
+                continue
+            if cost_map[neighbor] > cost_map[current] + 1:
+                cost_map[neighbor] = cost_map[current] + 1
+                frontier.append(neighbor)
+    return cost_map
+
+
+def wavefront_planner(
+    cost_map: np.ndarray, start: Tuple[int], goal: Tuple[int]
+):
+    # Generate all possible directions, including diagonals
+    directions = [
+        np.array(i)
+        for i in product([-1, 0, 1], repeat=binary_map.ndim)
+        if i != tuple([0] * binary_map.ndim)
+    ]
+    # Backtrack from the start to the goal
+
+    path = []
+    current = start
+    while current != goal:
+        path.append(current)
+        neighbors = [
+            tuple(np.array(current) + direction) for direction in directions
+        ]
+        current = min(
+            neighbors,
+            key=lambda x: (
+                cost_map[x]
+                if 0 <= x[0] < binary_map.shape[0]
+                and 0 <= x[1] < binary_map.shape[1]
+                and 0 <= x[2] < binary_map.shape[2]
+                else np.inf
+            ),
+        )
+    path.append(goal)
+
+    return path
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
@@ -104,7 +173,9 @@ if __name__ == "__main__":
     end = (2, 2, 2)
 
     # Find the path
-    path = astar(binary_map, start, end)
+    cost_map = wavefront_generation(binary_map, end)
+
+    path = wavefront_planner(cost_map, start, end)
     print(path)
 
     path.append(start)
