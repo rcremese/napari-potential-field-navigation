@@ -89,6 +89,15 @@ def astar(
 def wavefront_generation(
     binary_map: np.ndarray, goal: Tuple[int]
 ) -> np.ma.masked_array:
+    """Generate a distance map to the goal.
+
+    Args:
+        binary_map (np.ndarray): Binary map of the environment where 1 is free space and 0 is occupied space.
+        goal (Tuple[int]): _description_
+
+    Returns:
+        np.ma.masked_array: _description_
+    """
     # Generate all possible directions, including diagonals
     directions = [
         np.array(i)
@@ -99,7 +108,7 @@ def wavefront_generation(
     # Initialize the cost map with infinity
     cost_map = np.ma.masked_array(
         np.full(binary_map.shape, np.inf, dtype=np.float32),
-        mask=binary_map,
+        mask=~binary_map,
     )
     cost_map[goal] = 0
 
@@ -122,14 +131,71 @@ def wavefront_generation(
     return cost_map
 
 
+def uneven_wavefront_generation(
+    binary_map: np.ndarray,
+    goals: List[Tuple[int]],
+    spacing: Tuple[float] = None,
+) -> np.ma.masked_array:
+    """Generate a distance map to the goals with uneven spacing map.
+
+    Args:
+        binary_map (np.ndarray): binary map of the environment where 0 is free space and 1 is occupied space.
+        goals (List[Tuple[int]]): List of goals as indices in the map.
+        spacing (Tuple[float]): Soacing between the cells in the map. Defaults to None.
+
+    Returns:
+        np.ma.masked_array: Cost map to the goals as a masked array where masked values are obstacles.
+    """
+    if spacing is None:
+        spacing = np.ones(binary_map.ndim)
+    else:
+        assert (
+            len(spacing) == binary_map.ndim
+        ), "Spacing must have the same dimension as the map."
+        spacing = np.array(spacing)
+    # Generate all possible directions, including diagonals
+    directions = [
+        np.array(i)
+        for i in product([-1, 0, 1], repeat=binary_map.ndim)
+        if i != tuple([0] * binary_map.ndim)
+    ]
+
+    # Initialize the cost map with infinity
+    cost_map = np.ma.masked_array(
+        np.full(binary_map.shape, np.inf), mask=binary_map
+    )
+
+    # Initialize the frontier with the goals
+    frontier = goals.copy()
+
+    for goal in goals:
+        cost_map[goal] = 0
+
+    while frontier:
+        current = frontier.pop(0)
+        for direction in directions:
+            neighbor = tuple(np.array(current) + direction)
+            if np.any(np.array(neighbor) < 0) or np.any(
+                np.array(neighbor) >= np.array(binary_map.shape)
+            ):
+                continue
+            if cost_map.mask[neighbor]:
+                continue
+            cost = np.sum(np.abs(np.array(direction) * np.array(spacing)))
+            if cost_map[neighbor] > cost_map[current] + cost:
+                cost_map[neighbor] = cost_map[current] + cost
+                frontier.append(neighbor)
+    return cost_map
+
+
 def wavefront_planner(
     cost_map: np.ndarray, start: Tuple[int], goal: Tuple[int]
 ):
     # Generate all possible directions, including diagonals
     directions = [
         np.array(i)
-        for i in product([-1, 0, 1], repeat=binary_map.ndim)
-        if i != tuple([0] * binary_map.ndim)
+        for i in product([-1, 0, 1], repeat=cost_map.ndim)
+        if i != tuple([0] * cost_map.ndim)
     ]
     # Backtrack from the start to the goal
 
@@ -144,9 +210,9 @@ def wavefront_planner(
             neighbors,
             key=lambda x: (
                 cost_map[x]
-                if 0 <= x[0] < binary_map.shape[0]
-                and 0 <= x[1] < binary_map.shape[1]
-                and 0 <= x[2] < binary_map.shape[2]
+                if 0 <= x[0] < cost_map.shape[0]
+                and 0 <= x[1] < cost_map.shape[1]
+                and 0 <= x[2] < cost_map.shape[2]
                 else np.inf
             ),
         )
@@ -155,10 +221,7 @@ def wavefront_planner(
     return path
 
 
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    # Define the 3D binary map
+def test_astar():
     binary_map = np.array(
         [
             [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
@@ -166,21 +229,109 @@ if __name__ == "__main__":
             [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
         ]
     )
-    # binary_map = np.zeros_like(binary_map)
+    start = (0, 0, 0)
+    end = (2, 2, 2)
+    path = astar(binary_map, start, end)
+    assert path == [(0, 0, 0), (1, 1, 1), (2, 2, 2)]
+
+
+def test_wavefront_generation():
+    binary_map = np.array(
+        [
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+            [[0, 1, 0], [0, 0, 0], [0, 1, 0]],
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+        ]
+    )
+    end = (2, 2, 2)
+    cost_map = wavefront_generation(binary_map, end)
+    assert cost_map[end] == 0
+    assert cost_map[0, 0, 0] == 4
+    assert cost_map[1, 1, 1] == 3
+
+
+def test_wavefront_planner():
+    binary_map = np.array(
+        [
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+            [[0, 1, 0], [0, 0, 0], [0, 1, 0]],
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+        ]
+    )
+    start = (0, 0, 0)
+    end = (2, 2, 2)
+    cost_map = wavefront_generation(binary_map, end)
+    path = wavefront_planner(cost_map, start, end)
+    assert path == [(0, 0, 0), (1, 1, 1), (2, 2, 2)]
+
+
+def test_uneven_wavefront_generation():
+    binary_map = np.array(
+        [
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+            [[0, 1, 0], [0, 0, 0], [0, 1, 0]],
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+        ]
+    )
+    goals = [(0, 0, 0), (2, 2, 2)]
+    cost_map = uneven_wavefront_generation(
+        binary_map, goals, spacing=(1, 1, 1)
+    )
+    assert cost_map[0, 0, 0] == 0
+    assert cost_map[2, 2, 2] == 4
+    assert cost_map[1, 1, 1] == 3
+
+
+def test_uneven_wavefront_planner():
+    binary_map = np.array(
+        [
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+            [[0, 1, 0], [0, 0, 0], [0, 1, 0]],
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+        ]
+    )
+    goals = [(0, 0, 0), (2, 2, 2)]
+    cost_map = uneven_wavefront_generation(
+        binary_map, goals, spacing=(1, 1, 1)
+    )
+    path = wavefront_planner(cost_map, goals[0], goals[1])
+    assert path == [(0, 0, 0), (1, 1, 1), (2, 2, 2)]
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    # test_astar()
+    # test_wavefront_generation()
+    # test_wavefront_planner()
+    # test_uneven_wavefront_generation()
+    # test_uneven_wavefront_planner()
+    binary_map = np.array(
+        [
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+            [[0, 1, 0], [0, 0, 0], [0, 1, 0]],
+            [[0, 0, 0], [0, 1, 0], [0, 0, 0]],
+        ]
+    )
+
+    # Convert the binary map to a masked array
+    masked_map = np.ma.masked_equal(binary_map, 1)
 
     # Define the start and end points
     start = (0, 0, 0)
-    end = (2, 2, 2)
+    goals = [(2, 2, 2), (1, 1, 1)]
+
+    # Define the spacing between dimensions
+    spacing = [1, 2, 3]
 
     # Find the path
-    cost_map = wavefront_generation(binary_map, end)
-
-    path = wavefront_planner(cost_map, start, end)
+    print("Start computation")
+    cost_map = uneven_wavefront_generation(masked_map, goals, spacing)
+    print("Cost map generated")
+    path = wavefront_planner(masked_map, start, goals[0])
+    print("Path found")
     print(path)
-
-    path.append(start)
-
-    # Plot the path
+    ## Plot the path
     path = np.array(path) + 0.5
     print(path)
     fig = plt.figure()

@@ -1,22 +1,21 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 from enum import Enum
-from typing_extensions import Unpack
 
+from abc import ABC, abstractmethod
 import magicgui.widgets as widgets
-from magicgui.widgets.bases._widget import WidgetKwargs
 import napari.utils.notifications as notifications
 import numpy as np
 import scipy.ndimage as ndi
-from magicgui import magic_factory
-from magicgui.widgets import CheckBox, Container, create_widget
-from qtpy.QtWidgets import QHBoxLayout, QPushButton, QWidget
-from skimage.util import img_as_float
 import scipy.ndimage as ndi
 from napari.qt.threading import thread_worker
 import taichi as ti
+import taichi.math as tm
 
-from napari_potential_field_navigation.fields import ScalarField3D
+from napari_potential_field_navigation.fields import (
+    ScalarField3D,
+    VectorField3D,
+)
 from napari_potential_field_navigation._a_star import (
     astar,
     wavefront_generation,
@@ -37,7 +36,7 @@ class MethodSelection(Enum):
     A_STAR = "A*"
 
 
-class IoContainer(Container):
+class IoContainer(widgets.Container):
     """Contains all informations about the input datas"""
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
@@ -118,7 +117,10 @@ class IoContainer(Container):
                 "No label found. Please select a label file before croping the image."
             )
             return
-        slices = ndi.find_objects(self._viewer.layers["Label"].data)
+        ## Perform a crop of the image based on the label bounding box + 1 pixel
+        slices = ndi.find_objects(
+            ndi.binary_dilation(self._viewer.layers["Label"].data)
+        )
         # Take into account the shift of origin
         starting_index = [slide.start for slide in slices[0]]
         new_origin = np.array(
@@ -144,7 +146,7 @@ class IoContainer(Container):
         raise NotImplementedError
 
 
-class PointContainer(Container):
+class PointContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__(layout="horizontal")
         self._viewer = viewer
@@ -214,14 +216,40 @@ class PointContainer(Container):
         return self._position_layer.data
 
 
-class InitFieldContainer(Container):
-    name: str
-
-    def __init__(self, viewer: "napari.viewer.Viewer"):
+class InitFieldContainer(widgets.Container, ABC):
+    def __init__(self, viewer: "napari.viewer.Viewer", name: str):
         super().__init__()
         self._viewer = viewer
-
-        self.field: np.ma.MaskedArray = None
+        # self._domain_selection = widgets.ComboBox(
+        #     label="Domain selection",
+        #     choices=["Full domain", "Label domain"],
+        #     value="Full domain",
+        # )
+        self._compute_button = widgets.PushButton(text=f"Compute {name} field")
+        self._compute_button.changed.connect(self.compute)
+        self._save_file = widgets.FileEdit(
+            label=f"Save {self.method_name} field", mode="w"
+        )
+        self._save_file.changed.connect(self.save)
+        self._load_file = widgets.FileEdit(
+            label=f"Load {self.method_name} field"
+        )
+        self._load_file.changed.connect(self.load)
+        self._plot_vectors_check = widgets.CheckBox(
+            label="Plot vector field", value=False
+        )
+        self._plot_vectors_check.changed.connect(self.visualize)
+        self.extend(
+            [
+                widgets.Label(label=f"{self.method_name} field computation"),
+                # self._domain_selection,
+                self._save_file,
+                self._load_file,
+                self._plot_vectors_check,
+                self._compute_button,
+            ]
+        )
+        self._field: np.ma.MaskedArray = None
 
     def compute(self):
         raise NotImplementedError
@@ -235,30 +263,40 @@ class InitFieldContainer(Container):
             )
             return False
         with np.load(path) as data:
-            self.field = np.ma.masked_array(data["field"], mask=data["mask"])
+            self._field = np.ma.masked_array(data["field"], mask=data["mask"])
         return True
 
-    def save(self, path: str | Path, quiet: TYPE_CHECKING = False) -> None:
-        path = Path(path).resolve()
+    def save(self, path: str | Path, quiet: TYPE_CHECKING = False) -> bool:
+        path = Path(self._save_file.value).resolve()
         with path.open("wb") as file:
             np.savez_compressed(
                 file,
-                field=self.field.data,
-                mask=self.field.mask,
+                field=self._field.data,
+                mask=self._field.mask,
             )
         return True
 
     def visualize(self, plot_vectors=False) -> bool:
-        assert self.field.ndim == 3, "The field must be 3D"
+        assert self._field.ndim == 3, "The field must be 3D"
         assert isinstance(
-            self.field, np.ma.MaskedArray
+            self._field, np.ma.MaskedArray
         ), "The field must be a masked array"
         field = self.field
-
+        ## Check if the field is not None
+        if field is None:
+            notifications.show_error("No field found.")
+            return False
+        ## Remove the previous field if it exists
+        if self.method_name.capitalize() + " field" in self._viewer.layers:
+            self._viewer.layers.remove(
+                self.method_name.capitalize() + " field"
+            )
+        ## Plot the scalar field
         self._viewer.add_image(
             np.where(field.mask, 0, field.data),
-            name=self.name.capitalize() + " field",
+            name=self.method_name.capitalize() + " field",
             colormap="inferno",
+            blending="additive",
             scale=self._viewer.layers["Label"].scale,
             translate=self._viewer.layers["Label"].translate,
             metadata=self._viewer.layers["Label"].metadata,
@@ -298,35 +336,125 @@ class InitFieldContainer(Container):
             translate=self._viewer.layers["Label"].translate,
             metadata=self._viewer.layers["Label"].metadata,
         )
+        return True
+
+    @property
+    @abstractmethod
+    def method_name(self) -> str:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def field(self) -> np.ma.MaskedArray:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def vector_field(self) -> VectorField3D:
+        raise NotImplementedError
 
 
 class WavefrontContainer(InitFieldContainer):
-    name = "Wavefront"
-
     def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__()
+        super().__init__(viewer, self.method_name)
         self._viewer = viewer
 
-    def compute(self):
-        wavefront_generation(self._viewer.layers["Label"].data)
+    def compute(self) -> bool:
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the wavefront."
+            )
+            return False
+        if "Goal" not in self._viewer.layers:
+            notifications.show_error(
+                "No goal found. Please select a goal before computing the wavefront."
+            )
+            return False
+        assert (
+            len(self._viewer.layers["Goal"].data) == 1
+        ), "Only one goal is allowed"
+        label_layer = self._viewer.layers["Label"]
+        goal_idx = label_layer.world_to_data(
+            self._viewer.layers["Goal"].data[0]
+        )
+        goal_idx = tuple([round(idx) for idx in goal_idx])
+        if label_layer.data[goal_idx] == 0:
+            notifications.show_error("The goal must be in a free space.")
+            return False
+        ## Need to upsample the data to allow for gradient computation inside the volume
+        self._field = wavefront_generation(
+            ndi.binary_dilation(label_layer.data),
+            goal_idx,
+        )
+        self.visualize(plot_vectors=True)
+        return True
+
+    @property
+    def field(self) -> np.ma.MaskedArray:
+        return self._field
+
+    @property
+    def vector_field(self) -> VectorField3D:
+        if self._field is None:
+            notifications.show_error("No wavefront field found.")
+            return None
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the wavefront."
+            )
+            return None
+        label_layer = self._viewer.layers["Label"]
+        starting = np.array(label_layer.translate)
+        spacing = np.array(label_layer.scale)
+        ending = starting + spacing * label_layer.data.shape
+        bounds = Box3D(starting, ending)
+
+        dx, dy, dz = np.gradient(self.field, *spacing, edge_order=2)
+        dx[dx.mask] = 0
+        dy[dy.mask] = 0
+        dz[dz.mask] = 0
+        return VectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
+
+    @property
+    def method_name(self) -> str:
+        return "Wavefront"
 
 
-class AStarContainer(Container):
-    name = "A*"
-
+class AStarContainer(InitFieldContainer):
     def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__()
-        self._viewer = viewer
+        super().__init__(viewer, self.maethod_name)
 
     def compute(self):
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the wavefront."
+            )
+            return False
+        if "Goal" not in self._viewer.layers:
+            notifications.show_error(
+                "No goal found. Please select a goal before computing the wavefront."
+            )
+            return False
+        assert (
+            len(self._viewer.layers["Goal"].data) == 1
+        ), "Only one goal is allowed"
+
         astar(
             self._viewer.layers["Label"].data,
             self._viewer.layers["Goal"].data[0],
             self._viewer.layers["Initial positions"].data,
         )
 
+    @property
+    def method_name(self) -> str:
+        return "A*"
 
-class ApfContainer(Container):
+    @property
+    def field(self) -> np.ma.MaskedArray:
+        return self._field
+
+
+class ApfContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer = viewer
@@ -506,15 +634,15 @@ class ApfContainer(Container):
         return ScalarField3D(artificial_potential_field, self._bounds)
 
 
-class SimulationContainer(Container):
+class SimulationContainer(widgets.Container):
     def __init__(
         self,
         viewer: "napari.viewer.Viewer",
-        apf_container: ApfContainer,
+        field_container: InitFieldContainer,
     ):
         super().__init__()
         self._viewer = viewer
-        self._apf_container = apf_container
+        self._field_container = field_container
         self._time_slider = widgets.FloatSlider(
             min=0.1,
             max=1000,
@@ -665,13 +793,13 @@ class SimulationContainer(Container):
     #     return True
 
     def _initialize_simulation(self) -> bool:
-        potential_field = self._apf_container.potential_field
-        if potential_field is None:
+        vector_field = self._field_container.vector_field
+
+        if vector_field is None:
             notifications.show_error(
-                "No potential field found. Please compute the APF before running the simulation."
+                "No initial field found. Please compute the field before running the simulation."
             )
             return False
-        vector_field = -potential_field.spatial_gradient()
         if self._speed_slider.value > 0:
             vector_field.norm_clip(self._speed_slider.value)
 
@@ -743,46 +871,7 @@ class SimulationContainer(Container):
         return self._diffusivity_slider.value
 
 
-class OptimizationContainer(Container):
-    def __init__(
-        self, viewer: "napari.viewer.Viewer", sim_widget: SimulationContainer
-    ):
-        super().__init__(layout="horizontal")
-        self._viewer = viewer
-        self._sim_widget = sim_widget
-        ## Optimization widgets
-        self._nb_epochs_box = widgets.SpinBox(
-            label="Epochs", min=1, max=1000, step=10, value=100
-        )
-        self._lr_slider = widgets.FloatSpinBox(
-            min=0.001, max=10, value=0.1, label="Learning rate"
-        )
-
-        self._run_optimization_button = widgets.PushButton(
-            text="Run optimization"
-        )
-        self._run_optimization_button.changed.connect(self._run_optimization)
-        param_container = widgets.Container(
-            widgets=[
-                widgets.Label(label="Optimization parameters"),
-                self._nb_epochs_box,
-                self._lr_slider,
-            ],
-        )
-
-        self.extend(
-            [
-                param_container,
-                self._run_optimization_button,
-            ]
-        )
-
-    def _run_optimization(self):
-        notifications.show_info(f"nb_agents = {self._sim_widget.nb_agents}")
-        raise NotImplementedError
-
-
-class DiffApfWidget(Container):
+class DiffApfWidget(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         try:
@@ -793,19 +882,43 @@ class DiffApfWidget(Container):
         self._viewer = viewer
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
-        self._apf_container = ApfContainer(self._viewer)
+
+        ## Method selection
+        # self._method_selection = widgets.ComboBox(
+        #     label="Method selection",
+        #     choices=[method.value for method in MethodSelection],
+        #     value=MethodSelection.APF.value,
+        # )
+        # self._method_selection.changed.connect(self._update_method)
+        # ## Container associated with the method
+        # self._stackedWidget = QtWidgets.QStackedWidget()
+        # self._stackedWidget.addWidget(ApfContainer(self._viewer))
+        # self._stackedWidget.addWidget(WavefrontContainer(self._viewer))
+        # self._stackedWidget.addWidget(AStarContainer(self._viewer))
+
+        self._method_container = WavefrontContainer(self._viewer)
+
         self._simulation_container = SimulationContainer(
-            self._viewer, self._apf_container
-        )
-        self._optimization_container = OptimizationContainer(
-            self._viewer, self._simulation_container
+            self._viewer, self._method_container
         )
         self.extend(
             [
                 self._io_container,
                 self._point_container,
-                self._apf_container,
+                self._method_container,
                 self._simulation_container,
-                # self._optimization_container,
             ]
         )
+
+    # def _update_method(self, index: int):
+    # Change the visible widget in the stacked widget to the selected method
+    # self._stackedWidget.setCurrentIndex(index)
+
+    # if self._method_selection.value == MethodSelection.APF.value:
+    #     self._method_container = ApfContainer(self._viewer)
+    # elif self._method_selection.value == MethodSelection.WAVEFRONT.value:
+    #     self._method_container = WavefrontContainer(self._viewer)
+    # elif self._method_selection.value == MethodSelection.A_STAR.value:
+    #     self._method_container = AStarContainer(self._viewer)
+    # else:
+    #     raise ValueError("Unknown method selection")
