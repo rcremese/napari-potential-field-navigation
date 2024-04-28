@@ -1,6 +1,7 @@
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 from enum import Enum
+import logging
 
 from abc import ABC, abstractmethod
 import magicgui.widgets as widgets
@@ -11,6 +12,7 @@ import scipy.ndimage as ndi
 from napari.qt.threading import thread_worker
 import taichi as ti
 import taichi.math as tm
+import scipy.sparse.linalg as splinalg
 
 from napari_potential_field_navigation.fields import (
     ScalarField3D,
@@ -18,8 +20,13 @@ from napari_potential_field_navigation.fields import (
 )
 from napari_potential_field_navigation._a_star import (
     astar,
+    a_starfield,
     wavefront_generation,
 )
+from napari_potential_field_navigation._finite_difference import (
+    create_poisson_system,
+)
+
 from napari_potential_field_navigation.geometries import Box3D
 from napari_potential_field_navigation.simulations import (
     FreeNavigationSimulation,
@@ -217,7 +224,7 @@ class PointContainer(widgets.Container):
 
 
 class InitFieldContainer(widgets.Container, ABC):
-    def __init__(self, viewer: "napari.viewer.Viewer", name: str):
+    def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer = viewer
         # self._domain_selection = widgets.ComboBox(
@@ -225,7 +232,9 @@ class InitFieldContainer(widgets.Container, ABC):
         #     choices=["Full domain", "Label domain"],
         #     value="Full domain",
         # )
-        self._compute_button = widgets.PushButton(text=f"Compute {name} field")
+        self._compute_button = widgets.PushButton(
+            text=f"Compute {self.method_name} field"
+        )
         self._compute_button.changed.connect(self.compute)
         self._save_file = widgets.FileEdit(
             label=f"Save {self.method_name} field", mode="w"
@@ -254,7 +263,7 @@ class InitFieldContainer(widgets.Container, ABC):
     def compute(self):
         raise NotImplementedError
 
-    def load(self, path: str | Path, quiet: TYPE_CHECKING = False) -> bool:
+    def load(self, path: Union[str, Path]) -> bool:
         try:
             path = Path(path).resolve(strict=True)
         except FileNotFoundError:
@@ -266,7 +275,7 @@ class InitFieldContainer(widgets.Container, ABC):
             self._field = np.ma.masked_array(data["field"], mask=data["mask"])
         return True
 
-    def save(self, path: str | Path, quiet: TYPE_CHECKING = False) -> bool:
+    def save(self, path: Union[str, Path]) -> bool:
         path = Path(self._save_file.value).resolve()
         with path.open("wb") as file:
             np.savez_compressed(
@@ -307,26 +316,45 @@ class InitFieldContainer(widgets.Container, ABC):
 
         ## Code to plot also the vector field
         # TODO : Add spatial information
-        x_max, y_max, z_max = field.shape
-        dx, dy, dz = np.gradient(field, edge_order=2)
-        dx.fill_value = dy.fill_value = dz.fill_value = 0.0
-        X, Y, Z = np.meshgrid(
-            np.arange(x_max), np.arange(y_max), np.arange(z_max), indexing="ij"
-        )
-        # Vector field representation
-        valid_map = ~(dx.mask | dy.mask | dz.mask)
-        # if downscale > 1:
-        #     downscale_map = np.zeros_like(field, dtype=bool)
-        #     downscale_map[::downscale, ::downscale, ::downscale] = True
-        #     valid_map = valid_map & downscale_map
+        if "Vector field" in self._viewer.layers:
+            self._viewer.layers.remove("Vector field")
+        vector_field = self.vector_field.values
+
+        x, y, z = np.mgrid[
+            0 : field.shape[0], 0 : field.shape[1], 0 : field.shape[2]
+        ]
+
+        valid_map = ~field.mask
+
+        ## Downscale the vector field to avoid too many vectors
+        def highest_power_of_two(n):
+            return n & -n
+
+        vec_power_of_two = np.vectorize(highest_power_of_two)
+        downscale_factors = vec_power_of_two(field.shape)
+
+        downscale_map = np.zeros_like(field, dtype=bool)
+        downscale_map[
+            :: downscale_factors[0],
+            :: downscale_factors[1],
+            :: downscale_factors[2],
+        ] = True
+        valid_map = valid_map & downscale_map
+
+        # x_max, y_max, z_max = field.shape
+        # dx, dy, dz = np.gradient(field, edge_order=2)
+        # dx.fill_value = dy.fill_value = dz.fill_value = 0.0
+        # X, Y, Z = np.meshgrid(
+        #     np.arange(x_max), np.arange(y_max), np.arange(z_max), indexing="ij"
+        # )
+        # # Vector field representation
+        # valid_map = ~(dx.mask | dy.mask | dz.mask)
 
         data = np.zeros((valid_map.sum(), 2, 3))
-        data[:, 0, 0] = X[valid_map]
-        data[:, 0, 1] = Y[valid_map]
-        data[:, 0, 2] = Z[valid_map]
-        data[:, 1, 0] = -dx[valid_map]
-        data[:, 1, 1] = -dy[valid_map]
-        data[:, 1, 2] = -dz[valid_map]
+        data[:, 0, 0] = x[valid_map]
+        data[:, 0, 1] = y[valid_map]
+        data[:, 0, 2] = z[valid_map]
+        data[:, 1] = vector_field[valid_map]
 
         self._viewer.add_vectors(
             data,
@@ -355,9 +383,9 @@ class InitFieldContainer(widgets.Container, ABC):
 
 
 class WavefrontContainer(InitFieldContainer):
-    def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__(viewer, self.method_name)
-        self._viewer = viewer
+    # def __init__(self, viewer: "napari.viewer.Viewer"):
+    #     super().__init__(viewer)
+    #     self._viewer = viewer
 
     def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
@@ -386,7 +414,7 @@ class WavefrontContainer(InitFieldContainer):
             ndi.binary_dilation(label_layer.data),
             goal_idx,
         )
-        self.visualize(plot_vectors=True)
+        self.visualize(plot_vectors=self._plot_vectors_check.value)
         return True
 
     @property
@@ -421,10 +449,10 @@ class WavefrontContainer(InitFieldContainer):
 
 
 class AStarContainer(InitFieldContainer):
-    def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__(viewer, self.maethod_name)
+    # def __init__(self, viewer: "napari.viewer.Viewer"):
+    #     super().__init__(viewer)
 
-    def compute(self):
+    def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
                 "No label found. Please select a label file before computing the wavefront."
@@ -435,14 +463,84 @@ class AStarContainer(InitFieldContainer):
                 "No goal found. Please select a goal before computing the wavefront."
             )
             return False
+        if "Initial positions" not in self._viewer.layers:
+            notifications.show_error(
+                "No initial positions found. Please select initial positions before computing the wavefront."
+            )
+            return False
         assert (
             len(self._viewer.layers["Goal"].data) == 1
         ), "Only one goal is allowed"
+        label_layer = self._viewer.layers["Label"]
+        ## Check if the goal is in a free space
+        goal_idx = label_layer.world_to_data(
+            self._viewer.layers["Goal"].data[0]
+        )
+        goal_idx = tuple([round(idx) for idx in goal_idx])
+        ## Check if the initial position is in a free space
+        init_pos_idx = label_layer.world_to_data(
+            self._viewer.layers["Initial positions"].data[0]
+        )
+        init_pos_idx = tuple([round(idx) for idx in init_pos_idx])
 
-        astar(
-            self._viewer.layers["Label"].data,
-            self._viewer.layers["Goal"].data[0],
-            self._viewer.layers["Initial positions"].data,
+        if (
+            label_layer.data[goal_idx] == 0
+            or label_layer.data[init_pos_idx] == 0
+        ):
+            notifications.show_error(
+                "The goal and initial positions must be in the free space."
+            )
+            return False
+
+        path = astar(label_layer.data.astype(bool), init_pos_idx, goal_idx)
+        if path is False:
+            notifications.show_error("The A* algorithm failed.")
+            return False
+        path.append(init_pos_idx)
+        self._path = path
+        logging.info(f"Initial path found with length {len(path)}")
+
+        cost_map = np.ma.masked_array(
+            np.zeros(label_layer.data.shape, dtype=np.float32),
+            mask=~label_layer.data.astype(bool),
+            fill_value=0,
+        )
+        ## Set the values of the path as the distance to the goal
+        for i, p in enumerate(path):
+            cost_map[p] = len(path) - i
+        ## Create laplace matrix and the bc vector to solve the poisson equation
+        laplace_mat, rhs = create_poisson_system(
+            cost_map, spacing=label_layer.scale
+        )
+        ## Solve the system on a subset of the map
+        logging.info("Start solving the poisson equation")
+        valid_indices = label_layer.data.flat != 0
+        A = laplace_mat[valid_indices, :][:, valid_indices]
+        b = rhs[valid_indices]
+        x, info = splinalg.cg(A, b)
+        if info != 0:
+            logging.error(f"CG did not converge. Info code : {info}")
+            return False
+        ## Set the values of the solution to the cost map
+        cost_map.flat[valid_indices] = x
+        logging.info("Field estimation succeded ! Plotting the solution...")
+
+        self._field = cost_map
+        self.visualize(plot_vectors=self._plot_vectors_check.value)
+        return True
+
+    def visualize(self, plot_vectors=False) -> TYPE_CHECKING:
+        super().visualize(plot_vectors)
+        ## Visualise the initial path !
+        if "Path" in self._viewer.layers:
+            self._viewer.layers.remove("Path")
+        self._viewer.add_points(
+            self._path,
+            size=1,
+            face_color="green",
+            scale=self._viewer.layers["Label"].scale,
+            translate=self._viewer.layers["Label"].translate,
+            name="Path",
         )
 
     @property
@@ -452,6 +550,25 @@ class AStarContainer(InitFieldContainer):
     @property
     def field(self) -> np.ma.MaskedArray:
         return self._field
+
+    @property
+    def vector_field(self) -> VectorField3D:
+        if self._field is None:
+            notifications.show_error("No wavefront field found.")
+            return None
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the wavefront."
+            )
+            return None
+        label_layer = self._viewer.layers["Label"]
+        starting = np.array(label_layer.translate)
+        spacing = np.array(label_layer.scale)
+        ending = starting + spacing * label_layer.data.shape
+        bounds = Box3D(starting, ending)
+
+        dx, dy, dz = np.gradient(self.field.data, *spacing, edge_order=2)
+        return VectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
 
 
 class ApfContainer(widgets.Container):
@@ -800,8 +917,10 @@ class SimulationContainer(widgets.Container):
                 "No initial field found. Please compute the field before running the simulation."
             )
             return False
-        if self._speed_slider.value > 0:
-            vector_field.norm_clip(self._speed_slider.value)
+        ## Normalize the vector field (because it's too slow otherwise)
+        vector_field.normalize()
+        # if self._speed_slider.value > 0:
+        #     vector_field.norm_clip(self._speed_slider.value)
 
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -896,7 +1015,7 @@ class DiffApfWidget(widgets.Container):
         # self._stackedWidget.addWidget(WavefrontContainer(self._viewer))
         # self._stackedWidget.addWidget(AStarContainer(self._viewer))
 
-        self._method_container = WavefrontContainer(self._viewer)
+        self._method_container = AStarContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container

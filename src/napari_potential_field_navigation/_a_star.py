@@ -1,7 +1,13 @@
 import numpy as np
+import scipy.sparse.linalg as splinalg
 import heapq
 from itertools import product
 from typing import Tuple, Union, List
+import logging
+
+from napari_potential_field_navigation._finite_difference import (
+    create_poisson_system,
+)
 
 
 def heuristic(a: Tuple[int], b: Tuple[int]) -> float:
@@ -10,14 +16,18 @@ def heuristic(a: Tuple[int], b: Tuple[int]) -> float:
 
 
 def astar(
-    binary_map: np.ndarray, start: Tuple[int], goal: Tuple[int]
+    binary_map: np.ndarray,
+    start: Tuple[int],
+    goal: Tuple[int],
+    distance: str = "l1",
 ) -> Union[bool, List[Tuple[int]]]:
     """A* algorithm for path planning in a binary map.
 
     Args:
-        binary_map (np.ndarray): Binary map of the environment where 0 is free space and 1 is occupied space.
+        binary_map (np.ndarray): Binary map of the environment where 1 is free space and 0 is occupied space.
         start (Tuple[int]): Starting position as index in the map.
         goal (Tuple[int]): Goal position as index in the map.
+        distance (str): Distance metric to use for the heuristic. Defaults to "l1".
 
     Returns:
         Union[bool, List[Tuple[int]]]: List of indices from start to goal if a path is found, False otherwise.
@@ -25,21 +35,24 @@ def astar(
     assert (
         binary_map.ndim == len(start) == len(goal)
     ), "Dimensions of the map, start and goal must be the same."
-    ## Generate all possible l2 directions
-    # directions = [
-    #     np.array(i)
-    #     for i in product([-1, 0, 1], repeat=binary_map.ndim)
-    #     if i != tuple([0] * binary_map.ndim)
-    # ]
-
+    assert distance in ["l1", "l2"], "Distance metric must be l1 or l2."
     ## Generate all possible manhatan directions
-    directions = np.array(
-        [
-            np.eye(binary_map.ndim, dtype=int)[i] * j
-            for i in range(binary_map.ndim)
-            for j in [-1, 1]
+    if distance == "l1":
+        directions = np.array(
+            [
+                np.eye(binary_map.ndim, dtype=int)[i] * j
+                for i in range(binary_map.ndim)
+                for j in [-1, 1]
+            ]
+        )
+    ## Generate all possible l2 directions
+    elif distance == "l2":
+        directions = [
+            np.array(i)
+            for i in product([-1, 0, 1], repeat=binary_map.ndim)
+            if i != tuple([0] * binary_map.ndim)
         ]
-    )
+
     ## Initialize the open set, close set, came from, gscore, fscore and the heap
     close_set = set()
     came_from = {}
@@ -66,7 +79,7 @@ def astar(
                 np.array(neighbor) >= np.array(binary_map.shape)
             ):
                 continue
-            if binary_map[neighbor] == 1:
+            if binary_map[neighbor] == 0:
                 continue
 
             if neighbor in close_set and tentative_g_score >= gscore.get(
@@ -84,6 +97,53 @@ def astar(
                 )
                 heapq.heappush(oheap, (fscore[neighbor], neighbor))
     return False
+
+
+def a_starfield(
+    binary_map: np.ndarray,
+    start: Tuple[int],
+    goal: Tuple[int],
+    distance: str = "l1",
+) -> np.ma.masked_array:
+    """Use the A* algorithm to find the shortest path in a binary map and create a distance map based on the solution.
+
+    Args:
+        binary_map (np.ndarray): Binary map of the environment where 1 is free space and 0 is occupied space.
+        start (Tuple[int]): Starting position as index in the map.
+        goal (Tuple[int]): Goal position as index in the map.
+        distance (str): Distance metric to use for the heuristic. Defaults to "l1".
+    Returns:
+        np.ma.masked_array: Distance map to the goal as a masked array where masked values are obstacles.
+    """
+    logging.info("Start A* algorithm")
+    path = astar(~binary_map, start, goal, distance)
+    if path is False:
+        logging.error("No path found")
+        return False
+    logging.info("Initial path found. Start cost map generation.")
+    cost_map = np.ma.masked_array(
+        np.full(binary_map.shape, 0, dtype=np.float32),
+        mask=~binary_map,
+    )
+    ## Set the values of the path as the distance to the goal
+    path.append(start)
+    for i, p in enumerate(path):
+        cost_map[p] = len(path) - i
+    ## Create laplace matrix and the bc vector to solve the poisson equation
+    laplace_mat, rhs = create_poisson_system(cost_map, spacing=(1, 1, 1))
+    ## Solve the system on a subset of the map
+    logging.info("Start solving the poisson equation")
+    valid_indices = binary_map.flat != 0
+    A = laplace_mat[valid_indices, :][:, valid_indices]
+    b = rhs[valid_indices]
+    x, info = splinalg.cg(A, b)
+    logging.info(f"CG convergence info: {info}")
+    if info != 0:
+        logging.error("CG did not converge")
+        return False
+    ## Set the values of the solution to the cost map
+    cost_map.flat[valid_indices] = x
+    return cost_map
 
 
 def wavefront_generation(
@@ -328,7 +388,8 @@ if __name__ == "__main__":
     print("Start computation")
     cost_map = uneven_wavefront_generation(masked_map, goals, spacing)
     print("Cost map generated")
-    path = wavefront_planner(masked_map, start, goals[0])
+    # path = wavefront_planner(masked_map, start, goals[0])
+    path = astar(~binary_map, start, goals[0])
     print("Path found")
     print(path)
     ## Plot the path
