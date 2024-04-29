@@ -455,6 +455,57 @@ class SampledFieldFactory:
             )
 
 
+class BinaryMap3D(SampledField3D):
+    """Binary map in 3D space where each cell is either occupied or free.
+
+    Args:
+        values (np.ndarray): 3D array of 0s and 1s representing the binary map.
+        1 correspond to points inside the domain and 0 to points outside.
+        bounds (Box3D): Bounding box of the binary map.
+    """
+
+    def __init__(self, values: np.ndarray, bounds: Box3D) -> None:
+        assert values.ndim == 3, "Expected values to be 3D-array"
+        super().__init__(values, bounds)
+        self._values = ti.field(
+            dtype=ti.i32, shape=values.shape, needs_grad=False
+        )
+        self._values.from_numpy(values.astype(np.int32))
+        self._bounds = bounds
+        self.ndim = 3
+
+    @ti.func
+    def at(self, pos):
+        idx = tm.ivec3([0, 0, 0])
+        for i in ti.static(range(3)):
+            if pos[i] > self._bounds.max[i]:
+                idx[i] = self._values.shape[i] - 1
+            elif pos[i] < self._bounds.min[i]:
+                idx[i] = 0
+            else:
+                idx[i] = int(
+                    (pos[i] - self._bounds.min[i]) / self.step_sizes[i]
+                )
+        return self._values[idx]
+
+
+class SimpleVectorField3D(VectorField3D):
+    @ti.func
+    def at(self, pos):
+        idx = tm.ivec3([0, 0, 0])
+        ## Iterate over the 3 dimensions
+        for i in ti.static(range(3)):
+            if pos[i] > self._bounds.max[i]:
+                idx[i] = self._values.shape[i] - 1
+            elif pos[i] < self._bounds.min[i]:
+                idx[i] = 0
+            else:
+                idx[i] = int(
+                    (pos[i] - self._bounds.min[i]) / self.step_sizes[i]
+                )
+        return self._values[idx]
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 

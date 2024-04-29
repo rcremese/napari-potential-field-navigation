@@ -6,6 +6,7 @@ import napari_potential_field_navigation.geometries as geometries
 from napari_potential_field_navigation.fields import (
     VectorField2D,
     VectorField3D,
+    BinaryMap3D,
     lerp,
 )
 
@@ -217,6 +218,8 @@ class FreeNavigationSimulation(NavigationSimulation):
     ### Taichi kernels
     @ti.kernel
     def _reset_2d(self):
+        self.loss[None] = 0.0
+
         for n in ti.ndrange(self._nb_walkers):
             self._positions[n, 0] = self._init_pos[n]
             for t in ti.ndrange(self._nb_steps):
@@ -260,7 +263,7 @@ class FreeNavigationSimulation(NavigationSimulation):
     def compute_loss(self, t: int):
         for n in range(self._nb_walkers):
             self.loss[None] += (
-                tm.length(self._positions[n, t] - self.target)
+                tm.length(self._positions[n, t] - self.target) ** 2
             ) / self._nb_walkers
 
     ## Private methods
@@ -322,7 +325,43 @@ class FreeNavigationSimulation(NavigationSimulation):
         return self._dim
 
 
-class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
+class DomainNavigationSimulation(FreeNavigationSimulation):
+    def __init__(
+        self,
+        positions: np.ndarray,
+        target: np.ndarray,
+        vector_field: VectorField2D | VectorField3D,
+        domain: BinaryMap3D,
+        t_max: float = 100,
+        dt: float = 0.1,
+        diffusivity: float = 1,
+    ):
+        super().__init__(
+            positions, target, vector_field, t_max, dt, diffusivity
+        )
+        assert self.dim == 3, "Domain navigation simulation must be 3D"
+        assert isinstance(
+            domain, BinaryMap3D
+        ), "Domain must be a 3D binary map"
+        self._domain = domain
+
+    @ti.func
+    def collision_handling(self, n: int, t: int):
+        """Check all collision for a walker n at time t and apply changes.
+
+        Args:
+            n (int): walker index
+            t (int): timestep index
+        """
+        ## Frontier of the domain collisions
+        if not self.vector_field.contains(self._positions[n, t]):
+            self._domain_collision(n, t)
+        ## Free space navigation
+        if self._domain.at(self._positions[n, t]) != 1:
+            self._positions[n, t] = self._positions[n, t - 1]
+
+
+class ClutteredNavigationSimulation(FreeNavigationSimulation):
     def __init__(
         self,
         positions: np.ndarray,
@@ -360,7 +399,16 @@ class ClutteredNavigationSimulation2D(FreeNavigationSimulation):
             self._obstacles.max[i] = obs.max
 
     def collision_handling(self, n: int, t: int):
-        super().collision_handling(n, t)
+        """Check all collision for a walker n at time t and apply changes.
+
+        Args:
+            n (int): walker index
+            t (int): timestep index
+        """
+        ## Domain collisions
+        if not self.vector_field.contains(self._positions[n, t]):
+            self._domain_collision(n, t)
+
         for o in ti.ndrange(self.nb_obstacles):
             if self._obstacles[o].contains(self._positions[n, t]):
                 self._obstacle_collision(n, t, o)

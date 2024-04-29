@@ -147,17 +147,22 @@ def create_poisson_system(
         spacing
     ), "The spacing must match the number of dimensions"
     ## Create the laplacian matrix and apply the boundary conditions for 2D and 3D
+    laplace_matrix = splinalg.LaplacianNd(
+        boundary_conditions.shape,
+        boundary_conditions="dirichlet",
+        dtype=np.float32,
+    ).tosparse()
     if boundary_conditions.ndim == 2:
-        laplace_matrix = create_laplacian_matrix_2d(
-            *boundary_conditions.shape, *spacing
-        )
+        # laplace_matrix = create_laplacian_matrix_2d(
+        #     *boundary_conditions.shape, *spacing
+        # )
         laplace_matrix, rhs = apply_laplace_dirichlet_2D(
             laplace_matrix, boundary_conditions
         )
     elif boundary_conditions.ndim == 3:
-        laplace_matrix = create_laplacian_matrix_3d(
-            *boundary_conditions.shape, *spacing
-        )
+        # laplace_matrix = create_laplacian_matrix_3d(
+        #     *boundary_conditions.shape, *spacing
+        # )
         laplace_matrix, rhs = apply_laplace_dirichlet_3D(
             laplace_matrix, boundary_conditions
         )

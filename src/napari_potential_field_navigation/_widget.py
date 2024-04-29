@@ -17,10 +17,11 @@ import scipy.sparse.linalg as splinalg
 from napari_potential_field_navigation.fields import (
     ScalarField3D,
     VectorField3D,
+    SimpleVectorField3D,
+    BinaryMap3D,
 )
 from napari_potential_field_navigation._a_star import (
     astar,
-    a_starfield,
     wavefront_generation,
 )
 from napari_potential_field_navigation._finite_difference import (
@@ -30,6 +31,7 @@ from napari_potential_field_navigation._finite_difference import (
 from napari_potential_field_navigation.geometries import Box3D
 from napari_potential_field_navigation.simulations import (
     FreeNavigationSimulation,
+    DomainNavigationSimulation,
 )
 import csv
 
@@ -318,7 +320,9 @@ class InitFieldContainer(widgets.Container, ABC):
         # TODO : Add spatial information
         if "Vector field" in self._viewer.layers:
             self._viewer.layers.remove("Vector field")
-        vector_field = self.vector_field.values
+        vector_field = self.vector_field
+        vector_field.normalize()
+        vector_field = vector_field.values
 
         x, y, z = np.mgrid[
             0 : field.shape[0], 0 : field.shape[1], 0 : field.shape[2]
@@ -441,7 +445,7 @@ class WavefrontContainer(InitFieldContainer):
         dx[dx.mask] = 0
         dy[dy.mask] = 0
         dz[dz.mask] = 0
-        return VectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
+        return SimpleVectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
 
     @property
     def method_name(self) -> str:
@@ -568,7 +572,16 @@ class AStarContainer(InitFieldContainer):
         bounds = Box3D(starting, ending)
 
         dx, dy, dz = np.gradient(self.field.data, *spacing, edge_order=2)
-        return VectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
+        ## Be sure to point toward the goal in the trajectory
+        # path_inv goes from the start to the goal
+        path_inv = self._path[::-1]
+        for i, pos in enumerate(path_inv[:-1]):
+            next_pos = path_inv[i + 1]
+            dx[pos] = np.array(next_pos[0]) - np.array(pos[0])
+            dy[pos] = np.array(next_pos[1]) - np.array(pos[1])
+            dz[pos] = np.array(next_pos[2]) - np.array(pos[2])
+
+        return SimpleVectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
 
 
 class ApfContainer(widgets.Container):
@@ -760,31 +773,32 @@ class SimulationContainer(widgets.Container):
         super().__init__()
         self._viewer = viewer
         self._field_container = field_container
-        self._time_slider = widgets.FloatSlider(
-            min=0.1,
-            max=1000,
+        self._time_slider = widgets.FloatSpinBox(
+            min=1,
+            max=10_000,
             value=100,
+            step=1,
             label="Simulation final time (s)",
         )
-        self._timestep_slider = widgets.FloatSlider(
+        self._timestep_slider = widgets.FloatSpinBox(
             min=0.01,
             max=1,
             value=1,
             step=0.01,
             label="Simulation time step (s)",
         )
-        self._speed_slider = widgets.FloatSlider(
+        self._speed_slider = widgets.FloatSpinBox(
             min=0,
             max=10,
             value=0,
             step=0.1,
             label="Maximal speed (cm/s)",
         )
-        self._diffusivity_slider = widgets.FloatSlider(
+        self._diffusivity_slider = widgets.FloatSpinBox(
             min=0,
             max=10,
             value=0,
-            step=0.1,
+            step=0.01,
             label="Agent diffusivity (cm^2/s)",
         )
 
@@ -824,22 +838,33 @@ class SimulationContainer(widgets.Container):
         self._lr_slider = widgets.FloatSpinBox(
             min=0.001, max=10, value=0.1, label="Learning rate"
         )
+        self._clip_value_slider = widgets.FloatSpinBox(
+            min=0, max=100, value=0, label="Clip value"
+        )
 
         self._run_optimization_button = widgets.PushButton(
             text="Run optimization"
         )
         self._run_optimization_button.changed.connect(self._run_optimization)
 
+        self._save_all_button = widgets.FileEdit(
+            label="Save all the generated datas", mode="w"
+        )
+        self._save_all_button.changed.connect(self._save_all)
+
         self.extend(
             [
                 widgets.Label(label="Optimization parameters"),
                 self._nb_epochs_box,
                 self._lr_slider,
+                self._clip_value_slider,
                 self._run_optimization_button,
+                self._save_all_button,
             ]
         )
 
         self.simulation = None
+        self._optimized_vector_field = None
 
     def _run_simulation(self) -> bool:
         # self._start_button.text = "Running simulation..."
@@ -927,7 +952,10 @@ class SimulationContainer(widgets.Container):
                 "No label found. Please select a label file before running the simulation."
             )
             return False
-
+        domain = BinaryMap3D(
+            self._viewer.layers["Label"].data.astype(bool),
+            vector_field.bounds,
+        )
         if "Initial positions" not in self._viewer.layers:
             notifications.show_error(
                 "No initial positions found. Please select initial positions before running the simulation."
@@ -947,10 +975,11 @@ class SimulationContainer(widgets.Container):
         goal = self._viewer.layers["Goal"].data[0]
         assert goal.shape == (3,), "Goal position must be a 3D vector"
 
-        self.simulation = FreeNavigationSimulation(
+        self.simulation = DomainNavigationSimulation(
             initial_positions,
             goal,
             vector_field,
+            domain=domain,
             t_max=self.tmax,
             dt=self.dt,
             diffusivity=self.diffusivity,
@@ -963,10 +992,128 @@ class SimulationContainer(widgets.Container):
                 "The simulation could not be initialized."
             )
             return False
-        self.simulation.optimize(
-            max_iter=self._nb_epochs_box.value, lr=self._lr_slider.value
-        )
+        max_iter = self._nb_epochs_box.value
+        lr = self._lr_slider.value
+        clip_value = self._clip_value_slider.value
+
+        best_loss = np.inf
+        best_vector_field = self.simulation.vector_field
+
+        for i in range(max_iter):
+            self.simulation.reset()
+            with ti.ad.Tape(self.simulation.loss):
+                self.simulation.run()
+                self.simulation.compute_loss(self.simulation.nb_steps - 1)
+            print("Iter=", i, "Loss=", self.simulation.loss[None])
+            if self.simulation.loss[None] < best_loss:
+                best_loss = self.simulation.loss[None]
+                best_vector_field = self.simulation.vector_field
+            self.simulation._update_force_field(lr)
+            if clip_value > 0.0:
+                self.simulation.vector_field.norm_clip(clip_value)
+
+        self._optimized_vector_field = best_vector_field
         self._plot_trajectories("Optimized trajectories")
+        self._plot_final_vector_field("Optimized vector field")
+        return True
+
+    def _save_all(self, path: Union[str, Path] = None) -> bool:
+        if self._optimized_vector_field is None:
+            notifications.show_error(
+                "No optimized vector field found. Please run the optimization before saving the data."
+            )
+            return False
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before saving the data."
+            )
+            return False
+        if "Image" not in self._viewer.layers:
+            notifications.show_error(
+                "No image found. Please select an image file before saving the data."
+            )
+            return False
+        if "Goal" not in self._viewer.layers:
+            notifications.show_error(
+                "No goal found. Please select a goal before saving the data."
+            )
+            return False
+        if "Initial positions" not in self._viewer.layers:
+            notifications.show_error(
+                "No initial positions found. Please select initial positions before saving the data."
+            )
+            return False
+        if "Initial trajectories" not in self._viewer.layers:
+            notifications.show_error(
+                "No initial trajectories found. Please run the simulation before saving the data."
+            )
+            return False
+        if "Optimized trajectories" not in self._viewer.layers:
+            notifications.show_error(
+                "No optimized trajectories found. Please run the optimization before saving the data."
+            )
+            return False
+
+        path = Path(self._save_all_button.value).resolve()
+        label_layer = self._viewer.layers["Label"]
+
+        np.savez_compressed(
+            path,
+            image=self._viewer.layers["Image"].data,
+            goal=label_layer.world_to_data(
+                self._viewer.layers["Goal"].data[0]
+            ),
+            init_positions=label_layer.world_to_data(
+                self._viewer.layers["Initial positions"].data[0]
+            ),
+            astar_path=self._field_container._path,
+            scalar_field=self._field_container.field.data,
+            mask=self._field_container.field.mask,
+            vector_field=self._field_container.vector_field.values,
+            init_traj=self._viewer.layers["Initial trajectories"].data,
+            optimized_vector_field=self._optimized_vector_field.values,
+            optimized_trajectories=self._viewer.layers[
+                "Optimized trajectories"
+            ].data,
+            spacing=label_layer.scale,
+            origin=label_layer.translate,
+        )
+        notifications.show_info(f"Data saved at {path}")
+        return True
+
+    def _plot_final_vector_field(
+        self, name: str = "Opt<r sfdmized vector field"
+    ) -> bool:
+        if self._optimized_vector_field is None:
+            notifications.show_error(
+                "The optimization code did not run. Can not plot vector field"
+            )
+            return False
+        vector_field = self.simulation.vector_field.values
+
+        x, y, z = np.mgrid[
+            0 : vector_field.shape[0],
+            0 : vector_field.shape[1],
+            0 : vector_field.shape[2],
+        ]
+
+        valid_map = self._viewer.layers["Label"].data.astype(bool)
+
+        ## Downscale the vector field to avoid too many vectors
+        data = np.zeros((valid_map.sum(), 2, 3))
+        data[:, 0, 0] = x[valid_map]
+        data[:, 0, 1] = y[valid_map]
+        data[:, 0, 2] = z[valid_map]
+        data[:, 1] = vector_field[valid_map]
+
+        self._viewer.add_vectors(
+            data,
+            ndim=3,
+            name=name,
+            scale=self._viewer.layers["Label"].scale,
+            translate=self._viewer.layers["Label"].translate,
+            metadata=self._viewer.layers["Label"].metadata,
+        )
         return True
 
     @property
@@ -1016,6 +1163,7 @@ class DiffApfWidget(widgets.Container):
         # self._stackedWidget.addWidget(AStarContainer(self._viewer))
 
         self._method_container = AStarContainer(self._viewer)
+        # self._method_container = WavefrontContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container
