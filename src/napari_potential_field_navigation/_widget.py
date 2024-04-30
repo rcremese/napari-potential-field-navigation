@@ -750,87 +750,6 @@ class ApfContainer(InitFieldContainer):
         dz[dz.mask] = 0
         return SimpleVectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
 
-    # def _plot_apf(self, compute_success: bool = True) -> bool:
-    #     if not compute_success:
-    #         notifications.show_error(
-    #             "An error occured during the computation of the APF."
-    #         )
-    #         return False
-
-    #     artificial_potential_field = np.where(
-    #         self._viewer.layers["Label"].data, self.potential_field.values, 0
-    #     )
-    #     try:
-    #         self._viewer.layers["APF"].data = artificial_potential_field
-    #     except KeyError:
-    #         self._viewer.add_image(
-    #             artificial_potential_field,
-    #             name="APF",
-    #             colormap="inferno",
-    #             blending="additive",
-    #             scale=self._viewer.layers["Label"].scale,
-    #             translate=self._viewer.layers["Label"].translate,
-    #             metadata=self._viewer.layers["Label"].metadata,
-    #         )
-    #     return True
-
-    # @staticmethod
-    # def _compute_attractive_field(
-    #     label_layer: "napari.layers.Labels", goal_position: np.ndarray
-    # ) -> np.ndarray:
-    #     assert goal_position.shape == (3,), "Goal position must be 3D vector"
-    #     starting = np.array(label_layer.translate)
-    #     spacing = np.array(label_layer.scale)
-    #     ending = starting + spacing * label_layer.data.shape
-    #     spacial_grid = np.mgrid[
-    #         starting[0] : ending[0] : spacing[0],
-    #         starting[1] : ending[1] : spacing[1],
-    #         starting[2] : ending[2] : spacing[2],
-    #     ]
-
-    #     attractive_field = 0.5 * np.linalg.norm(
-    #         np.stack(
-    #             [
-    #                 spacial_grid[0] - goal_position[0],
-    #                 spacial_grid[1] - goal_position[1],
-    #                 spacial_grid[2] - goal_position[2],
-    #             ]
-    #         ),
-    #         axis=0,
-    #     )
-    #     return attractive_field
-
-    # # @property
-    # def potential_field(self) -> ScalarField3D:
-    #     if self._attractive_field is None or self._distance_field is None:
-    #         notifications.show_info(
-    #             "No exising Artificial Potential Field found. Click on compute APF to generate one."
-    #         )
-    #         return None
-
-    #     collision_radius = self._repulsive_radius_box.value
-    #     repulsive_field = np.zeros_like(self._distance_field)
-    #     valid_indices = (self._distance_field <= collision_radius) & (
-    #         self._distance_field > 0
-    #     )
-    #     repulsive_field[valid_indices] = (
-    #         0.5
-    #         * (
-    #             (collision_radius - self._distance_field[valid_indices])
-    #             / (collision_radius * self._distance_field[valid_indices])
-    #         )
-    #         ** 2
-    #     )
-    #     repulsive_field = np.where(
-    #         self._distance_field > 0, repulsive_field, 1e20
-    #     )
-    #     ratio = self._ratio_slider.value
-    #     artificial_potential_field = (
-    #         (1 - ratio) * self._attractive_field
-    #         + self._repulsive_weight_box.value * ratio * repulsive_field
-    #     )
-    #     return ScalarField3D(artificial_potential_field, self._bounds)
-
 
 class SimulationContainer(widgets.Container):
     def __init__(
@@ -998,23 +917,6 @@ class SimulationContainer(widgets.Container):
                 writer.writerow([traj, frame, pos[2], pos[1], pos[0]])
         return True
 
-    # def _update_simulation(self) -> bool:
-    #     if self.simulation is None:
-    #         notifications.show_error(
-    #             "The simulation could is not initialized."
-    #         )
-    #         return False
-    #     initial_positions = np.repeat(
-    #         self._viewer.layers["Initial positions"].data,
-    #         self._agent_count.value,
-    #         axis=0,
-    #     )
-
-    #     self.simulation.diffusivity = self.diffusivity
-    #     self.simulation.update_positions(initial_positions)
-    #     self.simulation.update_time(self.tmax, self.dt)
-    #     return True
-
     def _initialize_simulation(self) -> bool:
         vector_field = self._field_container.vector_field
 
@@ -1099,7 +1001,11 @@ class SimulationContainer(widgets.Container):
             self.simulation.diffusivity = diffusions[i]
             with ti.ad.Tape(self.simulation.loss):
                 self.simulation.run()
-                self.simulation.compute_loss(self.simulation.nb_steps - 1)
+                self.simulation.compute_distance_loss(
+                    self.simulation.nb_steps - 1
+                )
+                self.simulation.compute_bend_loss(min_diff=1e-6)
+                self.simulation.compute_loss(1.0, 1.0)
             print("Iter=", i, "Loss=", self.simulation.loss[None])
             if self.simulation.loss[None] < best_loss:
                 best_loss = self.simulation.loss[None]
@@ -1162,7 +1068,6 @@ class SimulationContainer(widgets.Container):
             init_positions=label_layer.world_to_data(
                 self._viewer.layers["Initial positions"].data[0]
             ),
-            astar_path=self._field_container._path,
             scalar_field=self._field_container.field.data,
             mask=self._field_container.field.mask,
             vector_field=self._field_container.vector_field.values,
@@ -1231,25 +1136,6 @@ class SimulationContainer(widgets.Container):
     @property
     def diffusivity(self) -> float:
         return self._diffusivity_slider.value
-
-
-@ti.kernel
-def compute_distance(
-    positions: ti.template, target: ti.template, loss: ti.template, tmax: int
-) -> float:
-    ti.atomic_add(loss, 1)
-    for i in range(positions.shape[0]):
-        for j in range(positions.shape[1]):
-            positions[i, j] = (positions[i, j] - target).norm()
-
-
-@ti.kernel
-def compute_bending(positions: ti.template) -> float:
-    for n in range(positions.shape[0]):
-        if i == 0 or i == positions.shape[0] - 1:
-            positions[i] = positions[i]
-        else:
-            positions[i] = 0.5 * (positions[i - 1] + positions[i + 1])
 
 
 class DiffApfWidget(widgets.Container):

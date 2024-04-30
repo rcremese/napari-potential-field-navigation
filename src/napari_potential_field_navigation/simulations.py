@@ -218,8 +218,6 @@ class FreeNavigationSimulation(NavigationSimulation):
     ### Taichi kernels
     @ti.kernel
     def _reset_2d(self):
-        self.loss[None] = 0.0
-
         for n in ti.ndrange(self._nb_walkers):
             self._positions[n, 0] = self._init_pos[n]
             for t in ti.ndrange(self._nb_steps):
@@ -344,6 +342,16 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
             domain, BinaryMap3D
         ), "Domain must be a 3D binary map"
         self._domain = domain
+        ## Initialise the loss
+        self.loss = ti.field(ti.f32, shape=(), needs_grad=True)
+        self.distance_loss = ti.field(ti.f32, shape=(), needs_grad=True)
+        self.bend_loss = ti.field(ti.f32, shape=(), needs_grad=True)
+
+    def reset(self):
+        super().reset()
+        self.loss[None] = 0.0
+        self.distance_loss[None] = 0.0
+        self.bend_loss[None] = 0.0
 
     @ti.func
     def collision_handling(self, n: int, t: int):
@@ -359,6 +367,36 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
         ## Free space navigation
         if self._domain.at(self._positions[n, t]) != 1:
             self._positions[n, t] = self._positions[n, t - 1]
+
+    @ti.kernel
+    def compute_loss(self, distance_weight: float, bend_weight: float):
+        self.loss[None] = (
+            distance_weight * self.distance_loss[None]
+            + bend_weight * self.bend_loss[None]
+        ) / self._nb_walkers
+
+    @ti.kernel
+    def compute_distance_loss(self, t_max: int):
+        for n in range(self._nb_walkers):
+            ti.atomic_add(
+                self.distance_loss[None],
+                tm.length(self._positions[n, t_max] - self.target) ** 2,
+            )
+
+    @ti.kernel
+    def compute_bend_loss(self, min_diff: float):
+        for n in range(self._nb_walkers):
+            for t in range(self._nb_steps - 1):
+                # F_t1 = self._positions[n, t] - self._positions[n, t - 1]
+                # F_t2 = self._positions[n, t + 1] - self._positions[n, t]
+                F_t1 = self.vector_field.at(self._positions[n, t])
+                F_t2 = self.vector_field.at(self._positions[n, t + 1])
+                f_diff = F_t2 - F_t1
+                if tm.length(f_diff) < min_diff:
+                    ti.atomic_add(self.bend_loss[None], 0.0)
+                else:
+                    bending = tm.atan2(tm.length(f_diff), tm.dot(F_t1, f_diff))
+                    ti.atomic_add(self.bend_loss[None], bending)
 
 
 class ClutteredNavigationSimulation(FreeNavigationSimulation):
