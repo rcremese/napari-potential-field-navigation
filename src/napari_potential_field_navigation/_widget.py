@@ -229,11 +229,6 @@ class InitFieldContainer(widgets.Container, ABC):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
         self._viewer = viewer
-        # self._domain_selection = widgets.ComboBox(
-        #     label="Domain selection",
-        #     choices=["Full domain", "Label domain"],
-        #     value="Full domain",
-        # )
         self._compute_button = widgets.PushButton(
             text=f"Compute {self.method_name} field"
         )
@@ -288,11 +283,11 @@ class InitFieldContainer(widgets.Container, ABC):
         return True
 
     def visualize(self, plot_vectors=False) -> bool:
-        assert self._field.ndim == 3, "The field must be 3D"
-        assert isinstance(
-            self._field, np.ma.MaskedArray
-        ), "The field must be a masked array"
         field = self.field
+        assert field.ndim == 3, "The field must be 3D"
+        assert isinstance(
+            field, np.ma.MaskedArray
+        ), "The field must be a masked array"
         ## Check if the field is not None
         if field is None:
             notifications.show_error("No field found.")
@@ -345,15 +340,6 @@ class InitFieldContainer(widgets.Container, ABC):
         ] = True
         valid_map = valid_map & downscale_map
 
-        # x_max, y_max, z_max = field.shape
-        # dx, dy, dz = np.gradient(field, edge_order=2)
-        # dx.fill_value = dy.fill_value = dz.fill_value = 0.0
-        # X, Y, Z = np.meshgrid(
-        #     np.arange(x_max), np.arange(y_max), np.arange(z_max), indexing="ij"
-        # )
-        # # Vector field representation
-        # valid_map = ~(dx.mask | dy.mask | dz.mask)
-
         data = np.zeros((valid_map.sum(), 2, 3))
         data[:, 0, 0] = x[valid_map]
         data[:, 0, 1] = y[valid_map]
@@ -387,10 +373,6 @@ class InitFieldContainer(widgets.Container, ABC):
 
 
 class WavefrontContainer(InitFieldContainer):
-    # def __init__(self, viewer: "napari.viewer.Viewer"):
-    #     super().__init__(viewer)
-    #     self._viewer = viewer
-
     def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -453,9 +435,6 @@ class WavefrontContainer(InitFieldContainer):
 
 
 class AStarContainer(InitFieldContainer):
-    # def __init__(self, viewer: "napari.viewer.Viewer"):
-    #     super().__init__(viewer)
-
     def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -584,184 +563,273 @@ class AStarContainer(InitFieldContainer):
         return SimpleVectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
 
 
-class ApfContainer(widgets.Container):
+class ApfContainer(InitFieldContainer):
     def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__()
-        self._viewer = viewer
+        super().__init__(viewer)
 
-        self._ratio_slider = widgets.FloatSlider(
-            min=0, max=1, value=0.5, label="Attractive / Repulsive ratio"
-        )
         self._resolution_combobox = widgets.ComboBox(
             label="Potential field resolution",
             choices=["1x", "2x", "4x", "8x", "16x"],
             value="1x",
         )
-        # self._attractive_weight_slider = widgets.FloatSlider(
-        #     min=1,
-        #     max=1000,
-        #     step=1,
-        #     value=1,
-        #     label="Attractive weight (unit)",
-        # )
-        # self._attractive_weight_slider.changed.connect(self._plot_apf)
-        self._repulsive_weight_slider = widgets.FloatSlider(
+        self._attractive_weight_box = widgets.FloatSpinBox(
+            min=1,
+            max=100,
+            step=1,
+            value=1,
+            label="Attractive weight (unit)",
+        )
+        self._repulsive_weight_box = widgets.FloatSpinBox(
             min=1,
             max=1000,
             step=1,
             value=1,
             label="Repulsive weight (unit)",
         )
-        # self._repulsive_weight_slider.changed.connect(self._plot_apf)
-        self._repulsive_radius_slider = widgets.FloatSlider(
+        self._repulsive_radius_box = widgets.FloatSpinBox(
             min=0.1, max=100, value=1, label="Repulsive radius (cm)"
         )
         self._weight_container = widgets.Container(
             widgets=[
-                widgets.Label(label="APF parameters"),
-                self._ratio_slider,
                 self._resolution_combobox,
-                # self._attractive_weight_slider,
-                self._repulsive_weight_slider,
-                self._repulsive_radius_slider,
+                self._attractive_weight_box,
+                self._repulsive_weight_box,
+                self._repulsive_radius_box,
             ],
             layout="vertical",
         )
-        self._weight_container.changed.connect(self._plot_apf)
-        self._compute_apf_box = widgets.PushButton(text="Compute APF")
-        self._compute_worker = self._compute_apf()
-        self._compute_worker.returned.connect(self._plot_apf)
-        self._compute_apf_box.changed.connect(self._compute_worker.start)
+        self._weight_container.changed.connect(self.update_apf)
+        # self._compute_apf_box = widgets.PushButton(text="Compute APF")
 
-        self.extend(
-            [
-                self._weight_container,
-                self._compute_apf_box,
-            ]
-        )
+        # self._compute_worker = self._compute_apf()
+        # self._compute_worker.returned.connect(self._plot_apf)
+        # self._compute_apf_box.changed.connect(self._compute_worker.start)
+
+        self.insert(1, self._weight_container)
 
         self._attractive_field = None
-        self._bounds = None
         self._distance_field = None
+        self._bounds = None
 
-    @thread_worker
-    def _compute_apf(self) -> bool:
+    def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
                 "No label found. Please select a label file before computing the APF."
             )
             return False
+        label_layer = self._viewer.layers["Label"]
         if "Goal" not in self._viewer.layers:
             notifications.show_error(
                 "No goal found. Please select a goal before computing the APF."
             )
             return False
-        self._compute_apf_box.text = "Computing APF..."
-        self._compute_apf_box.enabled = False
 
         if "APF" in self._viewer.layers:
             self._viewer.layers.remove("APF")
-            # self._viewer.layers.remove("Initial Vector Field")
-        label_layer = self._viewer.layers["Label"]
+        ## Start the computation
+        self._compute_button.text = "Computing APF..."
+        # self._compute_button.enabled = False
 
-        starting = np.array(label_layer.translate)
+        ## First define the field as a masked array
+        self._field = np.ma.array(
+            np.zeros_like(label_layer.data),
+            mask=~label_layer.data.astype(bool),
+            fill_value=np.inf,
+            dtype=np.float32,
+        )
+
+        goal_position = self._viewer.layers["Goal"].data[0]
+        ## Compute the attractive field
         spacing = np.array(label_layer.scale)
-        ending = starting + spacing * label_layer.data.shape
-        self._bounds = Box3D(starting, ending)
-
-        self._attractive_field = self._compute_attractive_field(
-            label_layer, self._viewer.layers["Goal"].data[0]
-        )
-
-        self._attractive_field[label_layer.data == 0] = 0
-        self._distance_field = ndi.distance_transform_edt(
-            label_layer.data, sampling=label_layer.scale
-        )
-        self._compute_apf_box.text = "Update APF"
-        self._compute_apf_box.enabled = True
-
-        return True
-
-    def _plot_apf(self, compute_success: bool = True) -> bool:
-        if not compute_success:
-            notifications.show_error(
-                "An error occured during the computation of the APF."
-            )
-            return False
-
-        artificial_potential_field = np.where(
-            self._viewer.layers["Label"].data, self.potential_field.values, 0
-        )
-        try:
-            self._viewer.layers["APF"].data = artificial_potential_field
-        except KeyError:
-            self._viewer.add_image(
-                artificial_potential_field,
-                name="APF",
-                colormap="inferno",
-                blending="additive",
-                scale=self._viewer.layers["Label"].scale,
-                translate=self._viewer.layers["Label"].translate,
-                metadata=self._viewer.layers["Label"].metadata,
-            )
-        return True
-
-    @staticmethod
-    def _compute_attractive_field(
-        label_layer: "napari.layers.Labels", goal_position: np.ndarray
-    ) -> np.ndarray:
-        assert goal_position.shape == (3,), "Goal position must be 3D vector"
-        starting = np.array(label_layer.translate)
-        spacing = np.array(label_layer.scale)
-        ending = starting + spacing * label_layer.data.shape
+        starting = np.array(label_layer.translate) + spacing / 2
+        ending = starting + spacing * label_layer.data.shape - spacing / 2
         spacial_grid = np.mgrid[
             starting[0] : ending[0] : spacing[0],
             starting[1] : ending[1] : spacing[1],
             starting[2] : ending[2] : spacing[2],
         ]
 
-        attractive_field = 0.5 * np.linalg.norm(
-            np.stack(
-                [
-                    spacial_grid[0] - goal_position[0],
-                    spacial_grid[1] - goal_position[1],
-                    spacial_grid[2] - goal_position[2],
-                ]
-            ),
-            axis=0,
+        self._attractive_field = 0.5 * (
+            (spacial_grid[0] - goal_position[0]) ** 2
+            + (spacial_grid[1] - goal_position[1]) ** 2
+            + (spacial_grid[2] - goal_position[2]) ** 2
         )
-        return attractive_field
 
-    @property
-    def potential_field(self) -> ScalarField3D:
-        if self._attractive_field is None or self._distance_field is None:
-            notifications.show_info(
-                "No exising Artificial Potential Field found. Click on compute APF to generate one."
+        ## Compute the distance field using the extended label data in order to have gradient values in the domain
+        self._distance_field = ndi.distance_transform_edt(
+            ndi.binary_dilation(label_layer.data), sampling=label_layer.scale
+        )
+        if not self.update_apf():
+            notifications.show_error(
+                "An error occured during the update of the APF."
             )
-            return None
 
-        collision_radius = self._repulsive_radius_slider.value
-        repulsive_field = np.zeros_like(self._distance_field)
-        valid_indices = (self._distance_field <= collision_radius) & (
-            self._distance_field > 0
+        self._compute_button.text = "Update APF"
+        self._compute_button.enabled = True
+
+        return True
+
+    def update_apf(self) -> bool:
+        if (self._distance_field is None) or (self._attractive_field is None):
+            notifications.show_error(
+                "No existing Artificial Potential Field found. Click on compute APF to generate one."
+            )
+            return False
+
+        ## Compute the repulsive field based on collision radius
+        ## Valid values are the ones inside the object and within the collision radius
+        collision_radius = self._repulsive_radius_box.value
+        repulsive_field = np.ma.masked_array(
+            np.zeros_like(self._distance_field),
+            mask=(self._distance_field == 0)
+            & (self._distance_field > collision_radius),
+            dtype=np.float32,
         )
-        repulsive_field[valid_indices] = (
+
+        repulsive_field[~repulsive_field.mask] = (
             0.5
             * (
-                (collision_radius - self._distance_field[valid_indices])
-                / (collision_radius * self._distance_field[valid_indices])
+                (
+                    collision_radius
+                    - self._distance_field[~repulsive_field.mask]
+                )
+                / (
+                    collision_radius
+                    * self._distance_field[~repulsive_field.mask]
+                )
             )
             ** 2
         )
-        repulsive_field = np.where(
-            self._distance_field > 0, repulsive_field, 1e20
+
+        ## Set the values of the repulsive field to infinity if the distance is 0
+        self._field[~self._field.mask] = (
+            self._attractive_weight_box.value
+            * self._attractive_field[~self._field.mask]
         )
-        ratio = self._ratio_slider.value
-        artificial_potential_field = (
-            (1 - ratio) * self._attractive_field
-            + self._repulsive_weight_slider.value * ratio * repulsive_field
+        self._field[~repulsive_field.mask] += (
+            self._repulsive_weight_box.value
+            * repulsive_field[~repulsive_field.mask]
         )
-        return ScalarField3D(artificial_potential_field, self._bounds)
+
+        ## Visualise the result
+        if not self.visualize(self._plot_vectors_check.value):
+            notifications.show_error(
+                "An error occured during the visualization of the APF."
+            )
+            return False
+
+        return True
+
+    @property
+    def method_name(self) -> str:
+        return "APF"
+
+    @property
+    def field(self) -> np.ma.MaskedArray:
+        return self._field
+
+    @property
+    def vector_field(self) -> VectorField3D:
+        if self._field is None:
+            notifications.show_error("No wavefront field found.")
+            return None
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the wavefront."
+            )
+            return None
+        label_layer = self._viewer.layers["Label"]
+        starting = np.array(label_layer.translate)
+        spacing = np.array(label_layer.scale)
+        ending = starting + spacing * label_layer.data.shape
+        bounds = Box3D(starting, ending)
+
+        dx, dy, dz = np.gradient(self.field, *spacing, edge_order=2)
+        dx[dx.mask] = 0
+        dy[dy.mask] = 0
+        dz[dz.mask] = 0
+        return SimpleVectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
+
+    # def _plot_apf(self, compute_success: bool = True) -> bool:
+    #     if not compute_success:
+    #         notifications.show_error(
+    #             "An error occured during the computation of the APF."
+    #         )
+    #         return False
+
+    #     artificial_potential_field = np.where(
+    #         self._viewer.layers["Label"].data, self.potential_field.values, 0
+    #     )
+    #     try:
+    #         self._viewer.layers["APF"].data = artificial_potential_field
+    #     except KeyError:
+    #         self._viewer.add_image(
+    #             artificial_potential_field,
+    #             name="APF",
+    #             colormap="inferno",
+    #             blending="additive",
+    #             scale=self._viewer.layers["Label"].scale,
+    #             translate=self._viewer.layers["Label"].translate,
+    #             metadata=self._viewer.layers["Label"].metadata,
+    #         )
+    #     return True
+
+    # @staticmethod
+    # def _compute_attractive_field(
+    #     label_layer: "napari.layers.Labels", goal_position: np.ndarray
+    # ) -> np.ndarray:
+    #     assert goal_position.shape == (3,), "Goal position must be 3D vector"
+    #     starting = np.array(label_layer.translate)
+    #     spacing = np.array(label_layer.scale)
+    #     ending = starting + spacing * label_layer.data.shape
+    #     spacial_grid = np.mgrid[
+    #         starting[0] : ending[0] : spacing[0],
+    #         starting[1] : ending[1] : spacing[1],
+    #         starting[2] : ending[2] : spacing[2],
+    #     ]
+
+    #     attractive_field = 0.5 * np.linalg.norm(
+    #         np.stack(
+    #             [
+    #                 spacial_grid[0] - goal_position[0],
+    #                 spacial_grid[1] - goal_position[1],
+    #                 spacial_grid[2] - goal_position[2],
+    #             ]
+    #         ),
+    #         axis=0,
+    #     )
+    #     return attractive_field
+
+    # # @property
+    # def potential_field(self) -> ScalarField3D:
+    #     if self._attractive_field is None or self._distance_field is None:
+    #         notifications.show_info(
+    #             "No exising Artificial Potential Field found. Click on compute APF to generate one."
+    #         )
+    #         return None
+
+    #     collision_radius = self._repulsive_radius_box.value
+    #     repulsive_field = np.zeros_like(self._distance_field)
+    #     valid_indices = (self._distance_field <= collision_radius) & (
+    #         self._distance_field > 0
+    #     )
+    #     repulsive_field[valid_indices] = (
+    #         0.5
+    #         * (
+    #             (collision_radius - self._distance_field[valid_indices])
+    #             / (collision_radius * self._distance_field[valid_indices])
+    #         )
+    #         ** 2
+    #     )
+    #     repulsive_field = np.where(
+    #         self._distance_field > 0, repulsive_field, 1e20
+    #     )
+    #     ratio = self._ratio_slider.value
+    #     artificial_potential_field = (
+    #         (1 - ratio) * self._attractive_field
+    #         + self._repulsive_weight_box.value * ratio * repulsive_field
+    #     )
+    #     return ScalarField3D(artificial_potential_field, self._bounds)
 
 
 class SimulationContainer(widgets.Container):
@@ -841,6 +909,17 @@ class SimulationContainer(widgets.Container):
         self._clip_value_slider = widgets.FloatSpinBox(
             min=0, max=100, value=0, label="Clip value"
         )
+        self._diffusion_decrease = widgets.ComboBox(
+            label="Diffusion decrease",
+            choices=["None", "Linear", "Exponential"],
+            value="None",
+        )
+        self._diffusion_min = widgets.FloatSpinBox(
+            label="Diffusion minimum",
+            min=0,
+            max=10,
+            value=0,
+        )
 
         self._run_optimization_button = widgets.PushButton(
             text="Run optimization"
@@ -858,6 +937,8 @@ class SimulationContainer(widgets.Container):
                 self._nb_epochs_box,
                 self._lr_slider,
                 self._clip_value_slider,
+                self._diffusion_decrease,
+                self._diffusion_min,
                 self._run_optimization_button,
                 self._save_all_button,
             ]
@@ -992,6 +1073,20 @@ class SimulationContainer(widgets.Container):
                 "The simulation could not be initialized."
             )
             return False
+        if self._diffusion_decrease.value == "Linear":
+            diffusions = np.linspace(
+                self.diffusivity,
+                self._diffusion_min.value,
+                self._nb_epochs_box.value,
+            )
+        elif self._diffusion_decrease.value == "Exponential":
+            diffusions = np.logspace(
+                np.log10(self.diffusivity),
+                np.log10(self._diffusion_min.value),
+                self._nb_epochs_box.value,
+            )
+        else:
+            diffusions = np.repeat(self.diffusivity, self._nb_epochs_box.value)
         max_iter = self._nb_epochs_box.value
         lr = self._lr_slider.value
         clip_value = self._clip_value_slider.value
@@ -1001,6 +1096,7 @@ class SimulationContainer(widgets.Container):
 
         for i in range(max_iter):
             self.simulation.reset()
+            self.simulation.diffusivity = diffusions[i]
             with ti.ad.Tape(self.simulation.loss):
                 self.simulation.run()
                 self.simulation.compute_loss(self.simulation.nb_steps - 1)
@@ -1137,6 +1233,25 @@ class SimulationContainer(widgets.Container):
         return self._diffusivity_slider.value
 
 
+@ti.kernel
+def compute_distance(
+    positions: ti.template, target: ti.template, loss: ti.template, tmax: int
+) -> float:
+    ti.atomic_add(loss, 1)
+    for i in range(positions.shape[0]):
+        for j in range(positions.shape[1]):
+            positions[i, j] = (positions[i, j] - target).norm()
+
+
+@ti.kernel
+def compute_bending(positions: ti.template) -> float:
+    for n in range(positions.shape[0]):
+        if i == 0 or i == positions.shape[0] - 1:
+            positions[i] = positions[i]
+        else:
+            positions[i] = 0.5 * (positions[i - 1] + positions[i + 1])
+
+
 class DiffApfWidget(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
@@ -1149,21 +1264,9 @@ class DiffApfWidget(widgets.Container):
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
 
-        ## Method selection
-        # self._method_selection = widgets.ComboBox(
-        #     label="Method selection",
-        #     choices=[method.value for method in MethodSelection],
-        #     value=MethodSelection.APF.value,
-        # )
-        # self._method_selection.changed.connect(self._update_method)
-        # ## Container associated with the method
-        # self._stackedWidget = QtWidgets.QStackedWidget()
-        # self._stackedWidget.addWidget(ApfContainer(self._viewer))
-        # self._stackedWidget.addWidget(WavefrontContainer(self._viewer))
-        # self._stackedWidget.addWidget(AStarContainer(self._viewer))
-
-        self._method_container = AStarContainer(self._viewer)
+        # self._method_container = AStarContainer(self._viewer)
         # self._method_container = WavefrontContainer(self._viewer)
+        self._method_container = ApfContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container

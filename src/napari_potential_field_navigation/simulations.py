@@ -174,7 +174,7 @@ class FreeNavigationSimulation(NavigationSimulation):
 
     def run(self):
         for t in range(1, self._nb_steps):
-            self.step(t)
+            self.step(t, self.diffusivity)
 
     def optimize(
         self,
@@ -237,12 +237,12 @@ class FreeNavigationSimulation(NavigationSimulation):
             self.vector_field._values.grad[i, j, k] = tm.vec3(0.0, 0.0, 0.0)
 
     @ti.kernel
-    def step(self, t: int):
+    def step(self, t: int, diffusivity: ti.f32):
         for n in ti.ndrange(self._nb_walkers):
             self._positions[n, t] = (
                 self._positions[n, t - 1]
                 + self._dt * self.vector_field.at(self._positions[n, t - 1])
-                + tm.sqrt(2 * self._dim * self._dt * self.diffusivity)
+                + tm.sqrt(2 * self._dim * self._dt * diffusivity)
                 * self._noise[n, t]
             )
             self.collision_handling(n, t)
