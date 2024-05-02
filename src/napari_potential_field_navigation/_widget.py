@@ -18,7 +18,7 @@ from napari_potential_field_navigation.fields import (
     ScalarField3D,
     VectorField3D,
     SimpleVectorField3D,
-    BinaryMap3D,
+    DistanceField,
 )
 from napari_potential_field_navigation._a_star import (
     astar,
@@ -58,25 +58,20 @@ class IoContainer(widgets.Container):
         # Label
         self._label_reader = widgets.FileEdit(label="Label path")
         self._label_reader.changed.connect(self._read_label)
-
+        io_container = widgets.Container(
+            widgets=[self._image_reader, self._label_reader],
+            layout="horizontal",
+        )
         self._crop_checkbox = widgets.PushButton(
             text="Crop image",
             tooltip="Crop the image and the labels to a bounding box containing all labels > 0. Helps reduce the computation time.",
         )
         self._crop_checkbox.changed.connect(self._crop_image)
-        self._lock_checkbox = widgets.CheckBox(text="Lock")
-        self._lock_checkbox.changed.connect(self._lock)
 
-        self._checkbox_container = widgets.Container(
-            widgets=[self._crop_checkbox, self._lock_checkbox],
-            layout="horizontal",
-        )
         self.extend(
             [
                 widgets.Label(label="Data selection"),
-                self._image_reader,
-                self._label_reader,
-                self._checkbox_container,
+                widgets.Container(widgets=[io_container, self._crop_checkbox]),
             ]
         )
 
@@ -148,31 +143,27 @@ class IoContainer(widgets.Container):
             ## TODO : uncomment to get the image at the right resolution
             self._viewer.layers["Image"].translate = new_origin
 
-    def _lock(self):
-        notifications.show_info(
-            "The image locking procedure is not yet available."
-        )
-        raise NotImplementedError
-
 
 class PointContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
-        super().__init__(layout="horizontal")
+        super().__init__()
         self._viewer = viewer
         self._source_selection = widgets.PushButton(text="Select goal")
         self._source_selection.changed.connect(self._select_source)
 
         self._positions_selection = widgets.PushButton(text="Select positions")
         self._positions_selection.changed.connect(self._select_positions)
-
+        selection_container = widgets.Container(
+            widgets=[self._source_selection, self._positions_selection],
+            layout="horizontal",
+        )
         self._goal_layer = None
         self._position_layer = None
 
         self.extend(
             [
                 widgets.Label(label="Point cloud selection"),
-                self._source_selection,
-                self._positions_selection,
+                selection_container,
             ]
         )
 
@@ -244,17 +235,22 @@ class InitFieldContainer(widgets.Container, ABC):
         self._plot_vectors_check = widgets.CheckBox(
             label="Plot vector field", value=False
         )
+        load_and_save_container = widgets.Container(
+            widgets=[self._save_file, self._load_file], layout="horizontal"
+        )
+        compute_container = widgets.Container(
+            widgets=[self._plot_vectors_check, self._compute_button],
+            layout="horizontal",
+        )
         self._plot_vectors_check.changed.connect(self.visualize)
         self.extend(
             [
                 widgets.Label(label=f"{self.method_name} field computation"),
-                # self._domain_selection,
-                self._save_file,
-                self._load_file,
-                self._plot_vectors_check,
-                self._compute_button,
+                load_and_save_container,
+                compute_container,
             ]
         )
+
         self._field: np.ma.MaskedArray = None
 
     def compute(self):
@@ -571,6 +567,7 @@ class ApfContainer(InitFieldContainer):
             label="Potential field resolution",
             choices=["1x", "2x", "4x", "8x", "16x"],
             value="1x",
+            enabled=False,
         )
         self._attractive_weight_box = widgets.FloatSpinBox(
             min=1,
@@ -682,7 +679,7 @@ class ApfContainer(InitFieldContainer):
         repulsive_field = np.ma.masked_array(
             np.zeros_like(self._distance_field),
             mask=(self._distance_field == 0)
-            & (self._distance_field > collision_radius),
+            | (self._distance_field > collision_radius),
             dtype=np.float32,
         )
 
@@ -788,37 +785,38 @@ class SimulationContainer(widgets.Container):
             step=0.01,
             label="Agent diffusivity (cm^2/s)",
         )
-
+        simu_param_container = widgets.Container(
+            widgets=[
+                self._time_slider,
+                self._timestep_slider,
+                self._speed_slider,
+                self._diffusivity_slider,
+            ],
+        )
+        ## Button to start the simulation
         self._agent_count = widgets.SpinBox(
             label="Number of agents", min=1, max=100, value=1
         )
         self._start_button = widgets.PushButton(text="Run simulation")
         self._start_button.changed.connect(self._run_simulation)
 
-        button_container = widgets.Container(
+        start_container = widgets.Container(
             widgets=[
                 self._agent_count,
                 self._start_button,
             ],
             layout="horizontal",
         )
-        self._exporter = widgets.FileEdit(
-            label="Export trajectories", mode="w"
-        )
-        self._exporter.changed.connect(self._export_trajectories)
 
         self.extend(
             [
                 widgets.Label(label="Simulation parameters"),
-                self._time_slider,
-                self._timestep_slider,
-                self._speed_slider,
-                self._diffusivity_slider,
-                button_container,
-                self._exporter,
+                simu_param_container,
+                start_container,
             ]
         )
         ## Optimization widgets
+        ## Classical optimization parameters
         self._nb_epochs_box = widgets.SpinBox(
             label="Epochs", min=1, max=1000, step=10, value=100
         )
@@ -826,40 +824,122 @@ class SimulationContainer(widgets.Container):
             min=0.001, max=10, value=0.1, label="Learning rate"
         )
         self._clip_value_slider = widgets.FloatSpinBox(
-            min=0, max=100, value=0, label="Clip value"
+            min=0,
+            max=100,
+            value=0,
+            label="Clip value",
+            tooltip="Gradient clipping value",
         )
+        optim_param_container = widgets.Container(
+            widgets=[
+                self._nb_epochs_box,
+                self._lr_slider,
+                self._clip_value_slider,
+            ],
+            layout="horizontal",
+        )
+
+        ## Diffusion decrease parameters
         self._diffusion_decrease = widgets.ComboBox(
             label="Diffusion decrease",
             choices=["None", "Linear", "Exponential"],
             value="None",
         )
-        self._diffusion_min = widgets.FloatSpinBox(
-            label="Diffusion minimum",
+        self._diffusion_max = widgets.FloatSpinBox(
+            label="Diffusion max",
             min=0,
             max=10,
             value=0,
         )
-
+        self._diffusion_min = widgets.FloatSpinBox(
+            label="Diffusion min",
+            min=0,
+            max=10,
+            value=0,
+        )
+        diffusion_container = widgets.Container(
+            widgets=[
+                self._diffusion_decrease,
+                self._diffusion_max,
+                self._diffusion_min,
+            ],
+            layout="horizontal",
+        )
+        ## Optimization weights parameters
+        self._goal_distance = widgets.FloatSpinBox(
+            label="Goal weight",
+            min=0,
+            max=100,
+            value=1.0,
+            tooltip="Weight of the goal distance in the loss function ||x_i - x_goal||^2",
+        )
+        self._obstacle_distance = widgets.FloatSpinBox(
+            label="Obstacle weight",
+            min=0,
+            max=100,
+            value=1.0,
+            tooltip="Weight of the obstacle distance in the loss function exp(-||x_i - x_obs||^2)",
+        )
+        self._bending_constraint = widgets.FloatSpinBox(
+            label="Bending weight",
+            min=0,
+            max=100,
+            value=1.0,
+            tooltip="Weight of the bending constraint in the loss function <F(x_{i+1}), F(x_i)>",
+        )
+        self._collision_lenght = widgets.FloatSpinBox(
+            label="Collision length",
+            min=0.1,
+            max=100,
+            value=1.0,
+            tooltip="Length of the obstacle collision constraint",
+        )
+        weights_container = widgets.Container(
+            widgets=[
+                self._goal_distance,
+                self._bending_constraint,
+                self._obstacle_distance,
+                self._collision_lenght,
+            ],
+            layout="horizontal",
+        )
+        ## Button to run the optimization & save the results
         self._run_optimization_button = widgets.PushButton(
             text="Run optimization"
         )
         self._run_optimization_button.changed.connect(self._run_optimization)
-
+        ## Buttons to save the results
+        # Export trajectories in the image space
+        self._exporter = widgets.FileEdit(
+            label="Export trajectories",
+            mode="w",
+            tooltip="Export the trajectories in image coordinate in a csv file",
+        )
+        self._exporter.changed.connect(self._export_trajectories)
+        # Export all the generated datas
         self._save_all_button = widgets.FileEdit(
-            label="Save all the generated datas", mode="w"
+            label="Save all (.npz)",
+            mode="w",
+            tooltip="Save all the generated datas in a npz file",
         )
         self._save_all_button.changed.connect(self._save_all)
+        save_container = widgets.Container(
+            widgets=[
+                self._exporter,
+                self._save_all_button,
+            ],
+            layout="horizontal",
+        )
 
         self.extend(
             [
                 widgets.Label(label="Optimization parameters"),
-                self._nb_epochs_box,
-                self._lr_slider,
-                self._clip_value_slider,
-                self._diffusion_decrease,
-                self._diffusion_min,
-                self._run_optimization_button,
-                self._save_all_button,
+                optim_param_container,
+                diffusion_container,
+                weights_container,
+                widgets.Container(widgets=[self._run_optimization_button]),
+                widgets.Label(label="Save results"),
+                save_container,
             ]
         )
 
@@ -935,8 +1015,12 @@ class SimulationContainer(widgets.Container):
                 "No label found. Please select a label file before running the simulation."
             )
             return False
-        domain = BinaryMap3D(
-            self._viewer.layers["Label"].data.astype(bool),
+        label_layer = self._viewer.layers["Label"]
+
+        distance_field = DistanceField(
+            ndi.distance_transform_edt(
+                label_layer.data, sampling=label_layer.scale
+            ),
             vector_field.bounds,
         )
         if "Initial positions" not in self._viewer.layers:
@@ -962,7 +1046,7 @@ class SimulationContainer(widgets.Container):
             initial_positions,
             goal,
             vector_field,
-            domain=domain,
+            distance_field=distance_field,
             t_max=self.tmax,
             dt=self.dt,
             diffusivity=self.diffusivity,
@@ -977,13 +1061,13 @@ class SimulationContainer(widgets.Container):
             return False
         if self._diffusion_decrease.value == "Linear":
             diffusions = np.linspace(
-                self.diffusivity,
+                self._diffusion_max.value,
                 self._diffusion_min.value,
                 self._nb_epochs_box.value,
             )
         elif self._diffusion_decrease.value == "Exponential":
             diffusions = np.logspace(
-                np.log10(self.diffusivity),
+                np.log10(self._diffusion_max.value),
                 np.log10(self._diffusion_min.value),
                 self._nb_epochs_box.value,
             )
@@ -992,6 +1076,10 @@ class SimulationContainer(widgets.Container):
         max_iter = self._nb_epochs_box.value
         lr = self._lr_slider.value
         clip_value = self._clip_value_slider.value
+        goal_weight = self._goal_distance.value
+        obstacle_weight = self._obstacle_distance.value
+        bend_weight = self._bending_constraint.value
+        collision_length = self._collision_lenght.value
 
         best_loss = np.inf
         best_vector_field = self.simulation.vector_field
@@ -1005,11 +1093,20 @@ class SimulationContainer(widgets.Container):
                     self.simulation.nb_steps - 1
                 )
                 self.simulation.compute_bend_loss(min_diff=1e-6)
-                self.simulation.compute_loss(1.0, 1.0)
+                self.simulation.compute_obstacle_loss(
+                    min_diff=1e-6, collision_length=collision_length
+                )
+                self.simulation.compute_loss(
+                    distance_weight=goal_weight,
+                    bend_weight=bend_weight,
+                    obstacle_weight=obstacle_weight,
+                )
             print("Iter=", i, "Loss=", self.simulation.loss[None])
             if self.simulation.loss[None] < best_loss:
                 best_loss = self.simulation.loss[None]
-                best_vector_field = self.simulation.vector_field
+                best_vector_field = np.copy(
+                    self.simulation.vector_field.values
+                )
             self.simulation._update_force_field(lr)
             if clip_value > 0.0:
                 self.simulation.vector_field.norm_clip(clip_value)
@@ -1083,14 +1180,14 @@ class SimulationContainer(widgets.Container):
         return True
 
     def _plot_final_vector_field(
-        self, name: str = "Opt<r sfdmized vector field"
+        self, name: str = "Optimized vector field"
     ) -> bool:
         if self._optimized_vector_field is None:
             notifications.show_error(
                 "The optimization code did not run. Can not plot vector field"
             )
             return False
-        vector_field = self.simulation.vector_field.values
+        vector_field = self._optimized_vector_field
 
         x, y, z = np.mgrid[
             0 : vector_field.shape[0],
@@ -1165,6 +1262,7 @@ class DiffApfWidget(widgets.Container):
                 self._simulation_container,
             ]
         )
+        self.max_width = 700
 
     # def _update_method(self, index: int):
     # Change the visible widget in the stacked widget to the selected method

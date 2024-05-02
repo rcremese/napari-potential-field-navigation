@@ -455,8 +455,8 @@ class SampledFieldFactory:
             )
 
 
-class BinaryMap3D(SampledField3D):
-    """Binary map in 3D space where each cell is either occupied or free.
+class DistanceField(SampledField3D):
+    """Signed distance field map where each cell is either occupied or free.
 
     Args:
         values (np.ndarray): 3D array of 0s and 1s representing the binary map.
@@ -468,9 +468,9 @@ class BinaryMap3D(SampledField3D):
         assert values.ndim == 3, "Expected values to be 3D-array"
         super().__init__(values, bounds)
         self._values = ti.field(
-            dtype=ti.i32, shape=values.shape, needs_grad=False
+            dtype=ti.float32, shape=values.shape, needs_grad=False
         )
-        self._values.from_numpy(values.astype(np.int32))
+        self._values.from_numpy(values)
         self._bounds = bounds
         self.ndim = 3
 
@@ -487,6 +487,18 @@ class BinaryMap3D(SampledField3D):
                     (pos[i] - self._bounds.min[i]) / self.step_sizes[i]
                 )
         return self._values[idx]
+
+    def spatial_gradient(self) -> "SimpleVectorField3D":
+        grad_values = np.stack(
+            np.gradient(
+                self.values,
+                *self.step_sizes,
+                edge_order=2,
+            ),
+            dtype=np.float32,
+            axis=-1,
+        )
+        return SimpleVectorField3D(grad_values, self._bounds)
 
 
 class SimpleVectorField3D(VectorField3D):
