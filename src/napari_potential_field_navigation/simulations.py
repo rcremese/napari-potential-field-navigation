@@ -403,7 +403,6 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
                     ti.atomic_add(self.bend_loss[None], 0.0)
                 else:
                     bending = tm.atan2(tm.length(f_diff), tm.dot(F_t1, f_diff))
-
                     ti.atomic_add(self.bend_loss[None], ti.abs(bending))
 
     @ti.kernel

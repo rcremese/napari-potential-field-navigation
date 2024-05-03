@@ -797,12 +797,15 @@ class SimulationContainer(widgets.Container):
         self._agent_count = widgets.SpinBox(
             label="Number of agents", min=1, max=100, value=1
         )
+        self._reset_button = widgets.PushButton(text="Reset simulation")
+        self._reset_button.changed.connect(self._initialize_simulation)
         self._start_button = widgets.PushButton(text="Run simulation")
         self._start_button.changed.connect(self._run_simulation)
 
         start_container = widgets.Container(
             widgets=[
                 self._agent_count,
+                self._reset_button,
                 self._start_button,
             ],
             layout="horizontal",
@@ -818,7 +821,7 @@ class SimulationContainer(widgets.Container):
         ## Optimization widgets
         ## Classical optimization parameters
         self._nb_epochs_box = widgets.SpinBox(
-            label="Epochs", min=1, max=1000, step=10, value=100
+            label="Epochs", min=1, max=1000, step=10, value=10
         )
         self._lr_slider = widgets.FloatSpinBox(
             min=0.001, max=10, value=0.1, label="Learning rate"
@@ -949,12 +952,23 @@ class SimulationContainer(widgets.Container):
     def _run_simulation(self) -> bool:
         # self._start_button.text = "Running simulation..."
         # self._start_button.enabled = False
-
         if not self._initialize_simulation():
             notifications.show_error(
                 "The simulation could not be initialized."
             )
             return False
+
+        # initial_positions = np.repeat(
+        #     self._viewer.layers["Initial positions"].data,
+        #     self._agent_count.value,
+        #     axis=0,
+        # )
+
+        # self.simulation.update_positions(initial_positions)
+        # self.simulation.update_time(
+        #     self._time_slider.value, self._timestep_slider.value
+        # )
+        # self.simulation.diffusivity = self._diffusivity_slider.value
         self.simulation.reset()
         self.simulation.run()
         self._plot_trajectories("Initial trajectories")
@@ -1075,7 +1089,8 @@ class SimulationContainer(widgets.Container):
             diffusions = np.repeat(self.diffusivity, self._nb_epochs_box.value)
         max_iter = self._nb_epochs_box.value
         lr = self._lr_slider.value
-        clip_value = self._clip_value_slider.value
+        clip_grad = self._clip_value_slider.value
+        clip_force = self._speed_slider.value
         goal_weight = self._goal_distance.value
         obstacle_weight = self._obstacle_distance.value
         bend_weight = self._bending_constraint.value
@@ -1101,16 +1116,28 @@ class SimulationContainer(widgets.Container):
                     bend_weight=bend_weight,
                     obstacle_weight=obstacle_weight,
                 )
-            print("Iter=", i, "Loss=", self.simulation.loss[None])
+            print(
+                "Iter=",
+                i,
+                "Loss=",
+                self.simulation.loss[None],
+                "\nDistance=",
+                self.simulation.distance_loss[None],
+                " Bending=",
+                self.simulation.bend_loss[None],
+                " Obstacle=",
+                self.simulation.obstacle_loss[None],
+            )
             if self.simulation.loss[None] < best_loss:
                 best_loss = self.simulation.loss[None]
                 best_vector_field = np.copy(
                     self.simulation.vector_field.values
                 )
+            if clip_grad > 0.0:
+                self.simulation.vector_field.norm_clip(clip_grad)
             self.simulation._update_force_field(lr)
-            if clip_value > 0.0:
-                self.simulation.vector_field.norm_clip(clip_value)
-
+            if clip_force > 0.0:
+                self.simulation.vector_field.norm_clip(clip_force)
         self._optimized_vector_field = best_vector_field
         self._plot_trajectories("Optimized trajectories")
         self._plot_final_vector_field("Optimized vector field")
@@ -1158,6 +1185,7 @@ class SimulationContainer(widgets.Container):
 
         np.savez_compressed(
             path,
+            method=self._field_container.method_name,
             image=self._viewer.layers["Image"].data,
             goal=label_layer.world_to_data(
                 self._viewer.layers["Goal"].data[0]
@@ -1168,11 +1196,13 @@ class SimulationContainer(widgets.Container):
             scalar_field=self._field_container.field.data,
             mask=self._field_container.field.mask,
             vector_field=self._field_container.vector_field.values,
-            init_traj=self._viewer.layers["Initial trajectories"].data,
-            optimized_vector_field=self._optimized_vector_field.values,
-            optimized_trajectories=self._viewer.layers[
-                "Optimized trajectories"
-            ].data,
+            init_traj=np.array(
+                self._viewer.layers["Initial trajectories"].data
+            ),
+            optimized_vector_field=self.simulation.vector_field.values,
+            optimized_trajectories=np.array(
+                self._viewer.layers["Optimized trajectories"].data
+            ),
             spacing=label_layer.scale,
             origin=label_layer.translate,
         )
@@ -1247,9 +1277,9 @@ class DiffApfWidget(widgets.Container):
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
 
-        # self._method_container = AStarContainer(self._viewer)
+        self._method_container = AStarContainer(self._viewer)
         # self._method_container = WavefrontContainer(self._viewer)
-        self._method_container = ApfContainer(self._viewer)
+        # self._method_container = ApfContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container
