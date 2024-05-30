@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Union, Optional
 from pathlib import Path
 
+EPS = 1e-6
+
 
 @ti.dataclass
 class State2D:
@@ -264,6 +266,16 @@ class FreeNavigationSimulation(NavigationSimulation):
                 tm.length(self._positions[n, t] - self.target) ** 2
             ) / self._nb_walkers
 
+    @ti.kernel
+    def clip_grad(self, clip_value: float):
+        for I in ti.grouped(self.vector_field._values):
+            if tm.length(self.vector_field._values.grad[I]) > clip_value:
+                self.vector_field._values.grad[I] = (
+                    clip_value
+                    * self.vector_field._values.grad[I]
+                    / tm.length(self.vector_field._values.grad[I])
+                )
+
     ## Private methods
     @ti.func
     def _domain_collision(self, n: int, t: int):
@@ -282,6 +294,9 @@ class FreeNavigationSimulation(NavigationSimulation):
     @ti.kernel
     def _update_force_field(self, lr: float):
         for I in ti.grouped(self.vector_field._values):
+            # remove nan that are not handled by the optimizer
+            if tm.isnan(self.vector_field._values.grad[I]).sum() != 0:
+                self.vector_field._values.grad[I] = 0.0
             self.vector_field._values[I] -= (
                 lr * self.vector_field._values.grad[I]
             )
@@ -323,6 +338,17 @@ class FreeNavigationSimulation(NavigationSimulation):
         return self._dim
 
 
+@ti.func
+def compute_cosine_similarity(v1: tm.vec3, v2: tm.vec3) -> ti.f32:
+    return tm.dot(v1, v2) / (tm.length(v1) * tm.length(v2) + EPS)
+
+
+@ti.func
+def compute_angle_3D(v1: tm.vec3, v2: tm.vec3) -> ti.f32:
+    cross = tm.cross(v1, v2)
+    return tm.atan2(tm.length(cross), tm.dot(v1, v2) + EPS)
+
+
 class DomainNavigationSimulation(FreeNavigationSimulation):
     def __init__(
         self,
@@ -351,10 +377,18 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
 
     def reset(self):
         super().reset()
+        self.reset_loss()
+
+    @ti.kernel
+    def reset_loss(self):
         self.loss[None] = 0.0
+        self.loss.grad[None] = 1.0
         self.distance_loss[None] = 0.0
+        self.distance_loss.grad[None] = 1.0
         self.bend_loss[None] = 0.0
+        self.bend_loss.grad[None] = 1.0
         self.obstacle_loss[None] = 0.0
+        self.obstacle_loss.grad[None] = 1.0
 
     @ti.func
     def collision_handling(self, n: int, t: int):
@@ -387,9 +421,11 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
     @ti.kernel
     def compute_distance_loss(self, t_max: int):
         for n in range(self._nb_walkers):
+            # diff = self._positions[n, t_max] - self.target
             ti.atomic_add(
                 self.distance_loss[None],
                 tm.length(self._positions[n, t_max] - self.target) ** 2,
+                # tm.dot(diff, diff),
             )
 
     @ti.kernel
@@ -398,12 +434,17 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
             for t in range(self._nb_steps - 1):
                 F_t1 = self.vector_field.at(self._positions[n, t])
                 F_t2 = self.vector_field.at(self._positions[n, t + 1])
-                f_diff = F_t2 - F_t1
-                if tm.length(f_diff) < min_diff:
-                    ti.atomic_add(self.bend_loss[None], 0.0)
-                else:
-                    bending = tm.atan2(tm.length(f_diff), tm.dot(F_t1, f_diff))
-                    ti.atomic_add(self.bend_loss[None], ti.abs(bending))
+                bending = compute_angle_3D(F_t1, F_t2)
+                # cos = compute_cosine_similarity(F_t1, F_t2)
+                # ti.atomic_add(self.bend_loss[None], (1 - cos) ** 2)
+                ti.atomic_add(self.bend_loss[None], bending**2)
+
+                # f_diff = F_t2 - F_t1
+                # if tm.length(f_diff) < min_diff:
+                #     ti.atomic_add(self.bend_loss[None], 0.0)
+                # else:
+                #     bending = tm.atan2(tm.length(f_diff), tm.dot(F_t1, f_diff))
+                #     ti.atomic_add(self.bend_loss[None], ti.abs(bending))
 
     @ti.kernel
     def compute_obstacle_loss(self, min_diff: float, collision_length: float):
@@ -411,26 +452,34 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
             for t in range(self._nb_steps - 1):
                 f1 = self.vector_field.at(self._positions[n, t])
                 f2 = self._distance_field_grad.at(self._positions[n, t])
-                if tm.length(f2) == 0.0 or tm.length(f1) == 0.0:
-                    ti.atomic_add(self.obstacle_loss[None], 0.0)
-                else:
-                    f1n = tm.normalize(f1)
-                    f2n = tm.normalize(f2)
-                    dist = self._distance_field.at(self._positions[n, t])
+                angle = compute_angle_3D(f1, f2)
+                # cos = compute_cosine_similarity(f1, f2)
+                obstacle_dist = self._distance_field.at(self._positions[n, t])
+                ti.atomic_add(
+                    self.obstacle_loss[None],
+                    angle**2
+                    * tm.exp(-0.5 * obstacle_dist**2 / collision_length),
+                )
+                # if tm.length(f2) == 0.0 or tm.length(f1) == 0.0:
+                #     ti.atomic_add(self.obstacle_loss[None], 0.0)
+                # else:
+                #     f1n = tm.normalize(f1)
+                #     f2n = tm.normalize(f2)
+                #     dist = self._distance_field.at(self._positions[n, t])
 
-                    f_diff = f2n - f1n
-                    if tm.length(f_diff) < min_diff:
-                        ti.atomic_add(self.obstacle_loss[None], 0.0)
-                    else:
-                        bending = tm.atan2(
-                            tm.length(f_diff), tm.dot(f1n, f_diff)
-                        )
+                #     f_diff = f2n - f1n
+                #     if tm.length(f_diff) < min_diff:
+                #         ti.atomic_add(self.obstacle_loss[None], 0.0)
+                #     else:
+                #         bending = tm.atan2(
+                #             tm.length(f_diff), tm.dot(f1n, f_diff)
+                #         )
 
-                        ti.atomic_add(
-                            self.obstacle_loss[None],
-                            ti.abs(bending)
-                            * tm.exp(-0.5 * dist**2 / collision_length),
-                        )
+                #         ti.atomic_add(
+                #             self.obstacle_loss[None],
+                #             ti.abs(bending)
+                #             * tm.exp(-0.5 * dist**2 / collision_length),
+                #         )
 
 
 class ClutteredNavigationSimulation(FreeNavigationSimulation):

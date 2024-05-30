@@ -746,6 +746,7 @@ class ApfContainer(InitFieldContainer):
         dy[dy.mask] = 0
         dz[dz.mask] = 0
         return SimpleVectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
+        # return VectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
 
 
 class SimulationContainer(widgets.Container):
@@ -1104,29 +1105,25 @@ class SimulationContainer(widgets.Container):
             self.simulation.diffusivity = diffusions[i]
             with ti.ad.Tape(self.simulation.loss):
                 self.simulation.run()
-                self.simulation.compute_distance_loss(
-                    self.simulation.nb_steps - 1
-                )
-                self.simulation.compute_bend_loss(min_diff=1e-6)
-                self.simulation.compute_obstacle_loss(
-                    min_diff=1e-6, collision_length=collision_length
-                )
+                if goal_weight > 0.0:
+                    self.simulation.compute_distance_loss(
+                        self.simulation.nb_steps - 1
+                    )
+                ## TODO : uncomment when the bending loss is implemented in the simulation and don't send nan.
+                if bend_weight > 0.0:
+                    self.simulation.compute_bend_loss(min_diff=1e-6)
+                if obstacle_weight > 0.0:
+                    self.simulation.compute_obstacle_loss(
+                        min_diff=1e-6, collision_length=collision_length
+                    )
                 self.simulation.compute_loss(
                     distance_weight=goal_weight,
                     bend_weight=bend_weight,
                     obstacle_weight=obstacle_weight,
                 )
             print(
-                "Iter=",
-                i,
-                "Loss=",
-                self.simulation.loss[None],
-                "\nDistance=",
-                self.simulation.distance_loss[None],
-                " Bending=",
-                self.simulation.bend_loss[None],
-                " Obstacle=",
-                self.simulation.obstacle_loss[None],
+                f"Iter={i}, Loss={self.simulation.loss[None]}",
+                f"\nDistance={self.simulation.distance_loss[None]/self.simulation.nb_walkers} Bending={self.simulation.bend_loss[None]} Obstacle={self.simulation.obstacle_loss[None]}",
             )
             if self.simulation.loss[None] < best_loss:
                 best_loss = self.simulation.loss[None]
@@ -1134,7 +1131,8 @@ class SimulationContainer(widgets.Container):
                     self.simulation.vector_field.values
                 )
             if clip_grad > 0.0:
-                self.simulation.vector_field.norm_clip(clip_grad)
+                self.simulation.clip_grad(clip_grad)
+                # self.simulation.vector_field.norm_clip(clip_grad)
             self.simulation._update_force_field(lr)
             if clip_force > 0.0:
                 self.simulation.vector_field.norm_clip(clip_force)
@@ -1277,9 +1275,9 @@ class DiffApfWidget(widgets.Container):
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
 
-        self._method_container = AStarContainer(self._viewer)
+        # self._method_container = AStarContainer(self._viewer)
         # self._method_container = WavefrontContainer(self._viewer)
-        # self._method_container = ApfContainer(self._viewer)
+        self._method_container = ApfContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container
