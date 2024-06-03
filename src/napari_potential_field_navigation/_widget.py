@@ -786,27 +786,33 @@ class SimulationContainer(widgets.Container):
             step=0.01,
             label="Agent diffusivity (cm^2/s)",
         )
+        ## Button to start the simulation
+        self._agent_count = widgets.SpinBox(
+            label="Number of agents", min=1, max=100, value=1
+        )
+        self._reset_button = widgets.ComboBox(
+            label="Vector field init",
+            value="Reset",
+            choices=["Reset", "Keep best", "Keep lastest"],
+        )
+        self._reset_button.enabled = False
+        ## Widget container
         simu_param_container = widgets.Container(
             widgets=[
                 self._time_slider,
                 self._timestep_slider,
                 self._speed_slider,
                 self._diffusivity_slider,
+                self._reset_button,
             ],
         )
-        ## Button to start the simulation
-        self._agent_count = widgets.SpinBox(
-            label="Number of agents", min=1, max=100, value=1
-        )
-        self._reset_button = widgets.PushButton(text="Reset simulation")
-        self._reset_button.changed.connect(self._initialize_simulation)
+        # self._reset_button.changed.connect(self._initialize_simulation)
         self._start_button = widgets.PushButton(text="Run simulation")
         self._start_button.changed.connect(self._run_simulation)
 
         start_container = widgets.Container(
             widgets=[
                 self._agent_count,
-                self._reset_button,
                 self._start_button,
             ],
             layout="horizontal",
@@ -958,6 +964,11 @@ class SimulationContainer(widgets.Container):
                 "The simulation could not be initialized."
             )
             return False
+        # if not self._initialize_simulation():
+        #     notifications.show_error(
+        #         "The simulation could not be initialized."
+        #     )
+        #     return False
 
         # initial_positions = np.repeat(
         #     self._viewer.layers["Initial positions"].data,
@@ -969,6 +980,7 @@ class SimulationContainer(widgets.Container):
         # self.simulation.update_time(
         #     self._time_slider.value, self._timestep_slider.value
         # )
+
         # self.simulation.diffusivity = self._diffusivity_slider.value
         self.simulation.reset()
         self.simulation.run()
@@ -984,6 +996,17 @@ class SimulationContainer(widgets.Container):
         self._viewer.add_tracks(
             self.simulation.trajectories,
             name=name.capitalize(),
+        )
+        ## TODO : handle with care the case where there is only one agent
+        if self.nb_agents == 1:
+            return True
+        ## Plot the mean trajectory
+        if f"Mean {name.lower()}" in self._viewer.layers:
+            self._viewer.layers.remove(f"Mean {name.lower()}")
+        self._viewer.add_tracks(
+            self.simulation.mean_trajectory,
+            colormap="twilight",
+            name=f"Mean {name.lower()}",
         )
         return True
 
@@ -1013,17 +1036,20 @@ class SimulationContainer(widgets.Container):
         return True
 
     def _initialize_simulation(self) -> bool:
-        vector_field = self._field_container.vector_field
+        if self._reset_button.value == "Reset":
+            vector_field = self._field_container.vector_field
+            ## Normalize the vector field (because it's too slow otherwise)
+            vector_field.normalize()
+        elif self._reset_button.value == "Keep best":
+            vector_field = self._optimized_vector_field
+        elif self._reset_button.value == "Keep lastest":
+            vector_field = self.simulation.vector_field
 
         if vector_field is None:
             notifications.show_error(
                 "No initial field found. Please compute the field before running the simulation."
             )
             return False
-        ## Normalize the vector field (because it's too slow otherwise)
-        vector_field.normalize()
-        # if self._speed_slider.value > 0:
-        #     vector_field.norm_clip(self._speed_slider.value)
 
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -1136,9 +1162,13 @@ class SimulationContainer(widgets.Container):
             self.simulation._update_force_field(lr)
             if clip_force > 0.0:
                 self.simulation.vector_field.norm_clip(clip_force)
-        self._optimized_vector_field = best_vector_field
+        self._optimized_vector_field = SimpleVectorField3D(
+            best_vector_field, self.simulation.vector_field.bounds
+        )
         self._plot_trajectories("Optimized trajectories")
         self._plot_final_vector_field("Optimized vector field")
+        ## Allow to use the optimized vector field for the simulation
+        self._reset_button.enabled = True
         return True
 
     def _save_all(self, path: Union[str, Path] = None) -> bool:
@@ -1215,7 +1245,9 @@ class SimulationContainer(widgets.Container):
                 "The optimization code did not run. Can not plot vector field"
             )
             return False
-        vector_field = self._optimized_vector_field
+        if name.capitalize() in self._viewer.layers:
+            self._viewer.layers.remove(name.capitalize())
+        vector_field = self._optimized_vector_field.values
 
         x, y, z = np.mgrid[
             0 : vector_field.shape[0],
@@ -1235,7 +1267,7 @@ class SimulationContainer(widgets.Container):
         self._viewer.add_vectors(
             data,
             ndim=3,
-            name=name,
+            name=name.capitalize(),
             scale=self._viewer.layers["Label"].scale,
             translate=self._viewer.layers["Label"].translate,
             metadata=self._viewer.layers["Label"].metadata,

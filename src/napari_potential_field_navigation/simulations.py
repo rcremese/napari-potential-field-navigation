@@ -326,6 +326,18 @@ class FreeNavigationSimulation(NavigationSimulation):
         return np.column_stack((ids, times, positions))
 
     @property
+    def mean_trajectory(self) -> np.ndarray:
+        """Mean trajectory of all the walkers with added ids and time steps. Useful for napari.Tracks plotting
+
+        Returns:
+            np.ndarray: array of dimensions (nb_steps, ID + time + spatial_dim)
+        """
+        mean_positions = np.mean(self.positions, axis=0)
+        ids = np.zeros(self.nb_steps, dtype=int)
+        times = np.arange(self.nb_steps, dtype=int)
+        return np.column_stack((ids, times, mean_positions))
+
+    @property
     def nb_walkers(self) -> int:
         return self._nb_walkers
 
