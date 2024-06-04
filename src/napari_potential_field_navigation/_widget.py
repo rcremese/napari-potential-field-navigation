@@ -13,6 +13,7 @@ from napari.qt.threading import thread_worker
 import taichi as ti
 import taichi.math as tm
 import scipy.sparse.linalg as splinalg
+import pandas as pd
 
 from napari_potential_field_navigation.fields import (
     ScalarField3D,
@@ -993,8 +994,15 @@ class SimulationContainer(widgets.Container):
             return False
         if name.capitalize() in self._viewer.layers:
             self._viewer.layers.remove(name.capitalize())
+        # self._viewer.add_tracks(
+        #     self.simulation.trajectories,
+        #     name=name.capitalize(),
+        # )
+        trajectories = self.trajectories
         self._viewer.add_tracks(
-            self.simulation.trajectories,
+            trajectories[["trajectory id", "frame index", "x", "y", "z"]],
+            properties=trajectories["source"],
+            color_by="source",
             name=name.capitalize(),
         )
         ## TODO : handle with care the case where there is only one agent
@@ -1004,8 +1012,12 @@ class SimulationContainer(widgets.Container):
         if f"Mean {name.lower()}" in self._viewer.layers:
             self._viewer.layers.remove(f"Mean {name.lower()}")
         self._viewer.add_tracks(
-            self.simulation.mean_trajectory,
-            colormap="twilight",
+            self.mean_trajectories[
+                ["trajectory id", "frame index", "x", "y", "z"]
+            ],
+            color_by="track_id",
+            colormap="hsv",
+            blending="translucent",
             name=f"Mean {name.lower()}",
         )
         return True
@@ -1018,21 +1030,63 @@ class SimulationContainer(widgets.Container):
             notifications.show_error("No filename provided.")
             return False
 
-        trajectories = self.simulation.trajectories
+        trajectories = self.trajectories
         label_layer = self._viewer.layers["Label"]
 
-        traj_ids = np.array(trajectories[:, 0], dtype=int)
-        frame_ind = np.array(trajectories[:, 1], dtype=int)
-        positions = (
-            np.array(trajectories[:, 2:]) - label_layer.metadata["origin"]
+        export_trajectories = pd.DataFrame(
+            columns=["trajectory id", "frame index", "x", "y", "z"]
+        )
+        export_trajectories["trajectory id"] = trajectories["trajectory id"]
+        export_trajectories["frame index"] = trajectories["frame index"]
+        export_trajectories[["z", "y", "x"]] = (
+            trajectories[["x", "y", "z"]] - label_layer.metadata["origin"]
         ) / label_layer.metadata["spacing"]
-        with open(self._exporter.value, "w", newline="") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(
-                ["trajectory id", "frame index", "x", "y", "z"]
-            )  # adjust this to match your data structure
-            for traj, frame, pos in zip(traj_ids, frame_ind, positions):
-                writer.writerow([traj, frame, pos[2], pos[1], pos[0]])
+        filepath = self._exporter.value.with_suffix(".csv")
+        export_trajectories.to_csv(filepath, index=False)
+
+        # trajectories[["z", "y", "x"]] = (
+        #     trajectories[["x", "y", "z"]] - label_layer.metadata["origin"]
+        # ) / label_layer.metadata["spacing"]
+        # trajectories.to_csv(self._exporter.value, index=False)
+        if self.nb_agents == 1:
+            return True
+        ## Export the mean trajectories
+        mean_trajectories = self.mean_trajectories
+        export_trajectories = pd.DataFrame(
+            columns=["trajectory id", "frame index", "x", "y", "z"]
+        )
+        export_trajectories["trajectory id"] = mean_trajectories[
+            "trajectory id"
+        ]
+        export_trajectories["frame index"] = mean_trajectories["frame index"]
+        export_trajectories[["z", "y", "x"]] = (
+            mean_trajectories[["x", "y", "z"]] - label_layer.metadata["origin"]
+        ) / label_layer.metadata["spacing"]
+        filepath = self._exporter.value.with_suffix(".csv")
+        filepath = filepath.with_stem(filepath.stem + "_mean")
+        export_trajectories.to_csv(filepath, index=False)
+
+        # mean_trajectories[["z", "y", "x"]] = (
+        #     mean_trajectories[["x", "y", "z"]] - label_layer.metadata["origin"]
+        # ) / label_layer.metadata["spacing"]
+        # # self._exporter.value
+        # filepath = self._exporter.value
+        # mean_trajectories.to_csv(
+        #     filepath.with_stem(filepath.stem + "_mean"), index=False
+        # )
+        # traj_ids = np.array(trajectories[:, 0], dtype=int)
+        # frame_ind = np.array(trajectories[:, 1], dtype=int)
+        # positions = (
+        #     np.array(trajectories[:, 2:]) - label_layer.metadata["origin"]
+        # ) / label_layer.metadata["spacing"]
+
+        # with open(self._exporter.value, "w", newline="") as csvfile:
+        #     writer = csv.writer(csvfile)
+        #     writer.writerow(
+        #         ["trajectory id", "frame index", "x", "y", "z"]
+        #     )  # adjust this to match your data structure
+        #     for traj, frame, pos in zip(traj_ids, frame_ind, positions):
+        #         writer.writerow([traj, frame, pos[2], pos[1], pos[0]])
         return True
 
     def _initialize_simulation(self) -> bool:
@@ -1294,6 +1348,43 @@ class SimulationContainer(widgets.Container):
     def diffusivity(self) -> float:
         return self._diffusivity_slider.value
 
+    @property
+    def nb_sources(self) -> int:
+        return self._viewer.layers["Initial positions"].data.shape[0]
+
+    @property
+    def trajectories(self) -> pd.DataFrame:
+        if self.simulation is None:
+            notifications.show_error("No simulation found.")
+            return None
+        sim_trajectories = self.simulation.trajectories
+        trajectories = pd.DataFrame(
+            sim_trajectories,
+            columns=["trajectory id", "frame index", "x", "y", "z"],
+        )
+        trajectories["source"] = np.repeat(
+            np.arange(self.nb_sources),
+            self.simulation.nb_steps * self.nb_agents,
+        ).astype(int)
+        return trajectories
+
+    @property
+    def mean_trajectories(self) -> pd.DataFrame:
+        if self.simulation is None:
+            notifications.show_error("No simulation found.")
+            return None
+        if self.nb_agents == 1:
+            return self.trajectories
+
+        mean_traj = self.trajectories.groupby(["source", "frame index"]).mean()
+        mean_traj["trajectory id"] = np.repeat(
+            range(self.nb_sources), self.simulation.nb_steps
+        ).astype(int)
+        mean_traj["frame index"] = np.tile(
+            range(self.simulation.nb_steps), self.nb_sources
+        )
+        return mean_traj
+
 
 class DiffApfWidget(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
@@ -1307,9 +1398,9 @@ class DiffApfWidget(widgets.Container):
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
 
-        # self._method_container = AStarContainer(self._viewer)
+        self._method_container = AStarContainer(self._viewer)
         # self._method_container = WavefrontContainer(self._viewer)
-        self._method_container = ApfContainer(self._viewer)
+        # self._method_container = ApfContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container
