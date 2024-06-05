@@ -366,7 +366,7 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
         self,
         positions: np.ndarray,
         target: np.ndarray,
-        vector_field: VectorField2D | VectorField3D,
+        vector_field: Union[VectorField2D, VectorField3D],
         distance_field: DistanceField,
         t_max: float = 100,
         dt: float = 0.1,
@@ -470,9 +470,7 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
                 ti.atomic_add(
                     self.obstacle_loss[None],
                     angle**2
-                    * tm.exp(
-                        -0.5 * obstacle_dist**2 / collision_length**2
-                    ),
+                    * tm.exp(-0.5 * obstacle_dist**2 / collision_length**2),
                 )
                 # if tm.length(f2) == 0.0 or tm.length(f1) == 0.0:
                 #     ti.atomic_add(self.obstacle_loss[None], 0.0)

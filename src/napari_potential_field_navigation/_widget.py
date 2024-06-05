@@ -296,7 +296,7 @@ class InitFieldContainer(widgets.Container, ABC):
             )
         ## Plot the scalar field
         self._viewer.add_image(
-            np.where(field.mask, 0, field.data),
+            np.where(field.mask, field.min(), field.data),
             name=self.method_name.capitalize() + " field",
             colormap="inferno",
             blending="additive",
@@ -421,9 +421,10 @@ class WavefrontContainer(InitFieldContainer):
         bounds = Box3D(starting, ending)
 
         dx, dy, dz = np.gradient(self.field, *spacing, edge_order=2)
-        dx[dx.mask] = 0
-        dy[dy.mask] = 0
-        dz[dz.mask] = 0
+        invalid_grad = dx.mask | dy.mask | dz.mask
+        dx[invalid_grad] = 0
+        dy[invalid_grad] = 0
+        dz[invalid_grad] = 0
         return SimpleVectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
 
     @property
@@ -557,6 +558,98 @@ class AStarContainer(InitFieldContainer):
             dy[pos] = np.array(next_pos[1]) - np.array(pos[1])
             dz[pos] = np.array(next_pos[2]) - np.array(pos[2])
 
+        return SimpleVectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
+
+
+class LaplaceContainer(InitFieldContainer):
+    def compute(self):
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the APF."
+            )
+            return False
+        label_layer = self._viewer.layers["Label"]
+        if "Goal" not in self._viewer.layers:
+            notifications.show_error(
+                "No goal found. Please select a goal before computing the APF."
+            )
+            return False
+
+        if "Laplace" in self._viewer.layers:
+            self._viewer.layers.remove("APF")
+        ## Start the computation
+        self._compute_button.text = "Computing Laplace field..."
+        ## Construct a dilated label map for PDE solve
+        dilated_label = ndi.binary_dilation(
+            label_layer.data, structure=np.ones((3, 3, 3))
+        )
+        ## First define the field as a masked array
+        self._field = np.ma.array(
+            np.zeros_like(dilated_label),
+            mask=~dilated_label,
+            fill_value=-np.inf,
+            dtype=np.float32,
+        )
+        goal_position = label_layer.world_to_data(
+            self._viewer.layers["Goal"].data[0]
+        )
+        goal_position = tuple([round(idx) for idx in goal_position])
+        # Select the index of the goal position
+        # goal_index = sub2ind_3D(label_layer.data.shape, *goal_position)
+        boundary_condition = np.zeros_like(dilated_label)
+        boundary_condition[goal_position] = 1
+        ## Create the laplacian matrix
+        laplace_mat, rhs = create_poisson_system(
+            boundary_condition, spacing=label_layer.scale
+        )
+        ## Solve the system on a subset of the map
+        logging.info("Start solving the poisson equation")
+        valid_indices = dilated_label.flat != 0
+        A = laplace_mat[valid_indices, :][:, valid_indices]
+        b = rhs[valid_indices]
+        x = splinalg.spsolve(A, b)
+        # x, info = splinalg.cg(A, b)
+        # if info != 0:
+        #     logging.error(f"CG did not converge. Info code : {info}")
+        #     return False
+        ## Set the values of the solution to the cost map
+        min_value = np.min(x[x > 0])
+        self._field.flat[valid_indices] = np.where(
+            x > min_value, np.log(x), np.log(min_value)
+        )
+        logging.info("Field estimation succeded ! Plotting the solution...")
+
+        self.visualize(plot_vectors=self._plot_vectors_check.value)
+        return True
+
+    @property
+    def method_name(self) -> str:
+        return "Laplace"
+
+    @property
+    def field(self) -> np.ma.MaskedArray:
+        return self._field
+
+    @property
+    def vector_field(self) -> VectorField3D:
+        if self._field is None:
+            notifications.show_error("No wavefront field found.")
+            return None
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No label found. Please select a label file before computing the wavefront."
+            )
+            return None
+        label_layer = self._viewer.layers["Label"]
+        starting = np.array(label_layer.translate)
+        spacing = np.array(label_layer.scale)
+        ending = starting + spacing * label_layer.data.shape
+        bounds = Box3D(starting, ending)
+
+        dx, dy, dz = np.gradient(self.field, *spacing, edge_order=2)
+        dx[dx.mask] = 0
+        dy[dy.mask] = 0
+        dz[dz.mask] = 0
         return SimpleVectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
 
 
@@ -1398,9 +1491,10 @@ class DiffApfWidget(widgets.Container):
         self._io_container = IoContainer(self._viewer)
         self._point_container = PointContainer(self._viewer)
 
-        self._method_container = AStarContainer(self._viewer)
+        # self._method_container = AStarContainer(self._viewer)
         # self._method_container = WavefrontContainer(self._viewer)
         # self._method_container = ApfContainer(self._viewer)
+        self._method_container = LaplaceContainer(self._viewer)
 
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container
