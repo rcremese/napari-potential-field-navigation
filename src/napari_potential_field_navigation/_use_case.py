@@ -3,20 +3,56 @@ from functools import wraps
 
 class UseCase:
     """
-    The UseCase class allows enabling or disabling elements of a chain of
-    dependencies
+    The `UseCase` class allows enabling or disabling steps depending on
+    constraints/requirements that express the intended flow of steps.
+
+    The steps are expected to be reified with classes (one step = one class).
+    The corresponding objects are registered with `UseCase.involve`.
+
+    The constraints/requirements are updated at designated checkpoints by the
+    methods decorated with the `use_case_check_point` function.
+
+    The `_enable` and `_disable` methods should be overloaded to implement the
+    actual step enabling/disabling logic.
+
+    This class can be specialized to hard-code the constraints in the `__init__`
+    method, in the `_requirements` dictionary.
+    This dictionary should have step-reifying classes (object types) as keys, to
+    represent the steps with constraints, and only those with constraints (that
+    basically are disabled at the start), and lists of constraints as values.
+    A constraint can be another step-reifying class or non-instantiated class
+    method (of type 'function').
+
+    Only the `involve` and `start` method should be used.
+    `involve` adds a `_use_case` attribute to the step-reifying objects so that
+    the decorated methods can trigger the `UseCase` logic and possibly unlock/
+    enable downstream steps.
     """
     def __init__(self):
         self._steps = []
         self._requirements = {}
         self._state = {}
 
-    def involve(self, steps):
+    def involve(self, steps, start=True):
+        """
+        Register steps, included those without constraints but that set
+        constraints/requirements on other downstream steps.
+
+        `steps` should be a list of step-reifying objects.
+
+        If argument `start` is True, the `start` method is called.
+        """
         self._steps.extend(steps)
         for step in steps:
             step._use_case = self
+        if start:
+            self.start()
 
     def start(self):
+        """
+        Initialize some state for the various steps and disables the steps with
+        unmet constraints.
+        """
         self._init_state()
         for step in self._steps:
             for conditional_step in self._requirements.keys():
@@ -114,10 +150,14 @@ class UseCase:
 
 
 def use_case_check_point(f):
+    """
+    Decorator for methods that may fulfill use case requirements.
+    """
     @wraps(f)
     def method_with_check_point(self, *args, **kwargs):
         ret = f(self, *args, **kwargs)
-        self._use_case.notify_update(self, f, ret)
+        decorated_f = getattr(type(self), f.__name__)
+        self._use_case.notify_update(self, decorated_f, ret)
         return ret
     return method_with_check_point
 

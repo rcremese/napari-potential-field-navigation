@@ -1524,8 +1524,6 @@ class DiffApfWidget(widgets.Container):
         )
         self.max_width = 700
 
-        self._use_case.start()
-
     # def _update_method(self, index: int):
     # Change the visible widget in the stacked widget to the selected method
     # self._stackedWidget.setCurrentIndex(index)
@@ -1546,6 +1544,11 @@ class DiffApfWidget(widgets.Container):
 
 
 class DefaultUseCase(UseCase):
+    """
+    See PR
+    [!5](https://github.com/rcremese/napari-potential-field-navigation/pull/5/files)
+    for an explaination of the dependencies between the containers.
+    """
     def __init__(self, InitFieldContainer: type):
         super().__init__()
         # Reminder: self._requirements[downstream] = upstream
