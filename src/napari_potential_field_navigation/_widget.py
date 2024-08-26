@@ -149,16 +149,21 @@ class IoContainer(widgets.Container):
     def _handle_layers_from_other_readers(self, event):
         # the newly inserted layer is the last one in the layer list
         layer = event.source[-1]
-        if isinstance(layer, napari.layers.image.image.Image) and \
-                layer.name not in ("Image", "Label_temp"):
-            # the layer was added using the viewer or File menu, for example by
-            # copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
-            if "Image" in self._viewer.layers:
-                self._viewer.layers.remove("Image")
-            layer.name = "Image"
+        if isinstance(layer, napari.layers.image.image.Image):
+            if layer.name not in ("Image", "Label_temp"):
+                # the layer has been added using the viewer or File menu, i.e.
+                # by copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
+                if "Image" in self._viewer.layers:
+                    self._viewer.layers.remove("Image")
+                layer.name = "Image"
 
-            if "Label" in self._viewer.layers:
-                self._crop_image()
+                if "Label" in self._viewer.layers:
+                    self._crop_image()
+
+            # any new Image layer is moved first (below all the other layers)
+            nlayers = len(self._viewer.layers)
+            if nlayers > 1:
+                self._viewer.layers.move(nlayers-1, 0)
 
 class PointContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
