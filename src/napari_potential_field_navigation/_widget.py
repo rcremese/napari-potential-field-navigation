@@ -153,6 +153,8 @@ class IoContainer(widgets.Container):
         if layer.name not in ("Image", "Label_temp", "Label"):
             # the layer was added using the viewer or File menu, for example by
             # copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
+            if "Image" in self._viewer.layers:
+                self._viewer.layers.remove("Image")
             layer.name = "Image"
 
             if "Label" in self._viewer.layers:
