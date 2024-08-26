@@ -36,8 +36,7 @@ from napari_potential_field_navigation.simulations import (
 )
 import csv
 
-if TYPE_CHECKING:
-    import napari
+import napari
 
 
 class MethodSelection(Enum):
@@ -150,7 +149,8 @@ class IoContainer(widgets.Container):
     def _handle_layers_from_other_readers(self, event):
         # the newly inserted layer is the last one in the layer list
         layer = event.source[-1]
-        if layer.name not in ("Image", "Label_temp", "Label"):
+        if isinstance(layer, napari.layers.image.image.Image) and \
+                layer.name not in ("Image", "Label_temp"):
             # the layer was added using the viewer or File menu, for example by
             # copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
             if "Image" in self._viewer.layers:
