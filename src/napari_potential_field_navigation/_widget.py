@@ -55,6 +55,9 @@ class IoContainer(widgets.Container):
         # Image
         self._image_reader = widgets.FileEdit(label="Image path")
         self._image_reader.changed.connect(self._read_image)
+        self._viewer.layers.events.inserted.connect(
+            self._handle_layers_from_other_readers
+        )
 
         # Label
         self._label_reader = widgets.FileEdit(label="Label path")
@@ -144,6 +147,16 @@ class IoContainer(widgets.Container):
             ## TODO : uncomment to get the image at the right resolution
             self._viewer.layers["Image"].translate = new_origin
 
+    def _handle_layers_from_other_readers(self, event):
+        # the newly inserted layer is the last one in the layer list
+        layer = event.source[-1]
+        if layer.name not in ("Image", "Label_temp", "Label"):
+            # the layer was added using the viewer or File menu, for example by
+            # copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
+            layer.name = "Image"
+
+            if "Label" in self._viewer.layers:
+                self._crop_image()
 
 class PointContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
