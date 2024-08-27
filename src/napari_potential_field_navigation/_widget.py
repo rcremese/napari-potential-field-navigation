@@ -40,9 +40,8 @@ from napari_potential_field_navigation._use_case import (
     UseCase,
     use_case_check_point,
 )
+import napari
 
-if TYPE_CHECKING:
-    import napari
 
 class MethodSelection(Enum):
     APF = "Artificial Potential Field"
@@ -105,9 +104,8 @@ class IoContainer(widgets.Container):
 
     @use_case_check_point
     def _read_label(self, label_path):
-		if self._autocrop:
-			self._crop_image()
-
+        if self._autocrop:
+            self._crop_image()
         if "Label" in self._viewer.layers:
             self._viewer.layers.remove("Label")
         labels = self._viewer.open(
@@ -167,9 +165,11 @@ class IoContainer(widgets.Container):
     def _handle_layers_from_other_readers(self, event):
         # the newly inserted layer is the last one in the layer list
         layer = event.source[-1]
-        if isinstance(layer, napari.layers.image.image.Image) and \
-                layer.name not in ("Image", "Label_temp") and \
-                not layer.name.endswith(" field"):
+        if (
+            isinstance(layer, napari.layers.image.image.Image)
+            and layer.name not in ("Image", "Label_temp")
+            and not layer.name.endswith(" field")
+        ):
             # the layer has been added using the viewer or File menu, i.e.
             # by copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
             if "Image" in self._viewer.layers:
@@ -182,7 +182,8 @@ class IoContainer(widgets.Container):
             # any new Image layer is moved first (below all the other layers)
             nlayers = len(self._viewer.layers)
             if nlayers > 1:
-                self._viewer.layers.move(nlayers-1, 0)
+                self._viewer.layers.move(nlayers - 1, 0)
+
 
 class PointContainer(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
@@ -1581,15 +1582,20 @@ class DefaultUseCase(UseCase):
     [!5](https://github.com/rcremese/napari-potential-field-navigation/pull/5/files)
     for an explaination of the dependencies between the containers.
     """
+
     def __init__(self, InitFieldContainer: type):
         super().__init__()
         # Reminder: self._requirements[downstream] = upstream
         self._requirements[PointContainer] = [
-            IoContainer._read_image, IoContainer._read_label
+            IoContainer._read_image,
+            IoContainer._read_label,
         ]
-        self._requirements[InitFieldContainer] = [PointContainer._select_source]
+        self._requirements[InitFieldContainer] = [
+            PointContainer._select_source
+        ]
         self._requirements[SimulationContainer] = [
-            PointContainer._select_positions, InitFieldContainer.compute
+            PointContainer._select_positions,
+            InitFieldContainer.compute,
         ]
         if InitFieldContainer is AStarContainer:
             self._requirements[InitFieldContainer].append(

@@ -1,4 +1,5 @@
 from functools import wraps
+import logging
 
 
 class UseCase:
@@ -28,6 +29,7 @@ class UseCase:
     the decorated methods can trigger the `UseCase` logic and possibly unlock/
     enable downstream steps.
     """
+
     def __init__(self):
         self._steps = []
         self._requirements = {}
@@ -153,11 +155,12 @@ def use_case_check_point(f):
     """
     Decorator for methods that may fulfill use case requirements.
     """
+
     @wraps(f)
     def method_with_check_point(self, *args, **kwargs):
         ret = f(self, *args, **kwargs)
         decorated_f = getattr(type(self), f.__name__)
         self._use_case.notify_update(self, decorated_f, ret)
         return ret
-    return method_with_check_point
 
+    return method_with_check_point
