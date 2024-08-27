@@ -36,6 +36,11 @@ from napari_potential_field_navigation.simulations import (
 )
 import csv
 
+from napari_potential_field_navigation._use_case import (
+    UseCase,
+    use_case_check_point,
+)
+
 if TYPE_CHECKING:
     import napari
 
@@ -80,11 +85,12 @@ class IoContainer(widgets.Container):
 
         self.extend([widgets.Label(label="Data selection"), io_container])
 
-    def _read_image(self):
+    @use_case_check_point
+    def _read_image(self, image_path):
         if "Image" in self._viewer.layers:
             self._viewer.layers.remove("Image")
         self._viewer.open(
-            self._image_reader.value,
+            image_path,
             plugin="napari-itk-io",
             layer_type="image",
             name="Image",
@@ -95,14 +101,15 @@ class IoContainer(widgets.Container):
             idx = self._viewer.layers.index("Label")
             self._viewer.layers.move(idx, -1)
 
-            if self._autocrop:
-                self._crop_image()
+    @use_case_check_point
+    def _read_label(self, label_path):
+		if self._autocrop:
+			self._crop_image()
 
-    def _read_label(self):
         if "Label" in self._viewer.layers:
             self._viewer.layers.remove("Label")
         labels = self._viewer.open(
-            self._label_reader.value,
+            label_path,
             plugin="napari-itk-io",
             layer_type="image",
             name="Label_temp",
@@ -179,6 +186,7 @@ class PointContainer(widgets.Container):
             ]
         )
 
+    @use_case_check_point
     def _select_source(self):
         if "Goal" in self._viewer.layers:
             self._viewer.layers.remove("Goal")
@@ -195,6 +203,7 @@ class PointContainer(widgets.Container):
         self._viewer.layers.selection = [self._goal_layer]
         self._goal_layer.mode = "add"
 
+    @use_case_check_point
     def _select_positions(self):
         if "Initial positions" not in self._viewer.layers:
             self._position_layer = self._viewer.add_points(
@@ -381,6 +390,7 @@ class InitFieldContainer(widgets.Container, ABC):
 
 
 class WavefrontContainer(InitFieldContainer):
+    @use_case_check_point
     def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -444,6 +454,7 @@ class WavefrontContainer(InitFieldContainer):
 
 
 class AStarContainer(InitFieldContainer):
+    @use_case_check_point
     def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -573,6 +584,7 @@ class AStarContainer(InitFieldContainer):
 
 
 class LaplaceContainer(InitFieldContainer):
+    @use_case_check_point
     def compute(self):
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -713,6 +725,7 @@ class ApfContainer(InitFieldContainer):
         self._distance_field = None
         self._bounds = None
 
+    @use_case_check_point
     def compute(self) -> bool:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
@@ -1507,6 +1520,8 @@ class DiffApfWidget(widgets.Container):
         # self._method_container = ApfContainer(self._viewer)
         self._method_container = LaplaceContainer(self._viewer)
 
+        self._use_case = DefaultUseCase(type(self._method_container))
+
         self._simulation_container = SimulationContainer(
             self._viewer, self._method_container
         )
@@ -1532,3 +1547,50 @@ class DiffApfWidget(widgets.Container):
     #     self._method_container = AStarContainer(self._viewer)
     # else:
     #     raise ValueError("Unknown method selection")
+
+    def extend(self, components):
+        if hasattr(self, "_use_case"):
+            self._use_case.involve(components)
+        super().extend(components)
+
+
+class DefaultUseCase(UseCase):
+    """
+    See PR
+    [!5](https://github.com/rcremese/napari-potential-field-navigation/pull/5/files)
+    for an explaination of the dependencies between the containers.
+    """
+    def __init__(self, InitFieldContainer: type):
+        super().__init__()
+        # Reminder: self._requirements[downstream] = upstream
+        self._requirements[PointContainer] = [
+            IoContainer._read_image, IoContainer._read_label
+        ]
+        self._requirements[InitFieldContainer] = [PointContainer._select_source]
+        self._requirements[SimulationContainer] = [
+            PointContainer._select_positions, InitFieldContainer.compute
+        ]
+        if InitFieldContainer is AStarContainer:
+            self._requirements[InitFieldContainer].append(
+                PointContainer._select_positions
+            )
+
+    def _disable(self, container: widgets.Container):
+        container.enabled = False
+
+    def _enable(self, container: widgets.Container):
+        container.enabled = True
+
+    def _ready(self, container, method, returned_value):
+        if method is IoContainer._read_image:
+            return "Image" in container._viewer.layers
+        elif method is IoContainer._read_label:
+            return "Label" in container._viewer.layers
+        elif method is PointContainer._select_source:
+            return "Goal" in container._viewer.layers
+        elif method is PointContainer._select_positions:
+            return "Initial positions" in container._viewer.layers
+        elif isinstance(returned_value, bool):
+            return returned_value
+        else:
+            return True
