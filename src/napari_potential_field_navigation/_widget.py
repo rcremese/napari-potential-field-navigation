@@ -63,18 +63,22 @@ class IoContainer(widgets.Container):
             widgets=[self._image_reader, self._label_reader],
             layout="horizontal",
         )
-        self._crop_checkbox = widgets.PushButton(
-            text="Crop image",
-            tooltip="Crop the image and the labels to a bounding box containing all labels > 0. Helps reduce the computation time.",
-        )
-        self._crop_checkbox.changed.connect(self._crop_image)
 
-        self.extend(
-            [
-                widgets.Label(label="Data selection"),
-                widgets.Container(widgets=[io_container, self._crop_checkbox]),
-            ]
-        )
+        # Autocropping (for now hard-coded)
+        self._autocrop = True
+
+        if not self._autocrop:
+            # Manual cropping
+            self._crop_checkbox = widgets.PushButton(
+                text="Crop image",
+                tooltip="Crop the image and the labels to a bounding box containing all labels > 0. Helps reduce the computation time.",
+            )
+            self._crop_checkbox.changed.connect(self._crop_image)
+            io_container = widgets.Container(
+                widgets=[io_container, self._crop_checkbox],
+            )
+
+        self.extend([widgets.Label(label="Data selection"), io_container])
 
     def _read_image(self):
         if "Image" in self._viewer.layers:
@@ -90,6 +94,9 @@ class IoContainer(widgets.Container):
         if "Label" in self._viewer.layers:
             idx = self._viewer.layers.index("Label")
             self._viewer.layers.move(idx, -1)
+
+            if self._autocrop:
+                self._crop_image()
 
     def _read_label(self):
         if "Label" in self._viewer.layers:
@@ -116,12 +123,16 @@ class IoContainer(widgets.Container):
 
         self._viewer.layers["Label"].editable = False
 
+        if self._autocrop and "Image" in self._viewer.layers:
+            self._crop_image()
+
     def _crop_image(self) -> None:
         if "Label" not in self._viewer.layers:
             notifications.show_error(
-                "No label found. Please select a label file before croping the image."
+                "No labels found. Please select a label file before cropping the image."
             )
             return
+        logging.info("Cropping the volume to the label bounding box")
         ## Perform a crop of the image based on the label bounding box + 1 pixel
         slices = ndi.find_objects(
             ndi.binary_dilation(self._viewer.layers["Label"].data)
