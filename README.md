@@ -10,6 +10,8 @@ A simple plugin for generating and visualizing trajectories in napari with a foc
 
 [![Graphical User Interface](https://i.ibb.co/SxtqsrD/screencast2.gif)](https://i.ibb.co/Kj9hHjr/screencast1.gif)
 
+[GitHub truncates the above animation; please click on the image to access its full-length version]
+
 The path finding algorithm it features stands out for its original potential field approach with simulation-based optimization.
 
 ## Installation
