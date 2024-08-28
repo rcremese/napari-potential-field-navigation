@@ -8,7 +8,7 @@
 
 A simple plugin for generating and visualizing trajectories in napari with a focus on lung navigation in CT scans.
 
-![Graphical User Interface](https://i.ibb.co/Kj9hHjr/screencast1.gif)
+<img alt="Graphical User Interface" src="https://i.ibb.co/Kj9hHjr/screencast1.gif" width="828" height="450" />
 
 The path finding algorithm it features stands out for its original potential field approach with simulation-based optimization.
 
