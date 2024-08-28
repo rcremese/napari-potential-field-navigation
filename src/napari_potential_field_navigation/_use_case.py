@@ -69,7 +69,10 @@ class UseCase:
                     "Empty list of requirements; do not reference such steps"
                 )
             for requirement in requirements:
-                checkpoint = requirement.__qualname__
+                if isinstance(requirement, str):
+                    checkpoint = requirement
+                else:
+                    checkpoint = requirement.__qualname__
                 self._state[checkpoint] = False
 
     def is_involved(self, step):
@@ -123,6 +126,9 @@ class UseCase:
         return True
 
     def notify_update(self, obj, met, ret):
+        """
+        Notify a method requirement update.
+        """
         cls = type(obj)
         for checkpoint in self._state.keys():
             if checkpoint in (cls.__qualname__, met.__qualname__):
@@ -134,11 +140,21 @@ class UseCase:
                 break
         self._refresh()
 
+    def notify_layer_update(self, obj, layer, ret):
+        """
+        Notify a layer requirement update.
+        """
+        self._state[layer] = layer in obj._viewer.layers
+        self._refresh()
+
     def _check_state(self, step):
         for conditional_step in self._requirements.keys():
             if type(step) is conditional_step:
                 for requirement in self._requirements[conditional_step]:
-                    checkpoint = requirement.__qualname__
+                    if isinstance(requirement, str):
+                        checkpoint = requirement
+                    else:
+                        checkpoint = requirement.__qualname__
                     if not self._state[checkpoint]:
                         return False
         return True
@@ -151,16 +167,34 @@ class UseCase:
                 self.disable(step)
 
 
-def use_case_check_point(f):
+def use_case_check_point(f_or_layer):
     """
     Decorator for methods that may fulfill use case requirements.
     """
 
-    @wraps(f)
-    def method_with_check_point(self, *args, **kwargs):
-        ret = f(self, *args, **kwargs)
-        decorated_f = getattr(type(self), f.__name__)
-        self._use_case.notify_update(self, decorated_f, ret)
-        return ret
+    if isinstance(f_or_layer, str):
+        layer = f_or_layer
 
-    return method_with_check_point
+        def decorator(f):
+
+            @wraps(f)
+            def method_with_check_point(self, *args, **kwargs):
+                ret = f(self, *args, **kwargs)
+                self._use_case.notify_layer_update(self, layer, ret)
+                return ret
+
+            return method_with_check_point
+
+        return decorator
+
+    else:
+        f = f_or_layer
+
+        @wraps(f)
+        def method_with_check_point(self, *args, **kwargs):
+            ret = f(self, *args, **kwargs)
+            decorated_f = getattr(type(self), f.__name__)
+            self._use_case.notify_update(self, decorated_f, ret)
+            return ret
+
+        return method_with_check_point

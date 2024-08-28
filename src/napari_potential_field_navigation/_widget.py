@@ -86,7 +86,7 @@ class IoContainer(widgets.Container):
 
         self.extend([widgets.Label(label="Data selection"), io_container])
 
-    @use_case_check_point
+    @use_case_check_point("Image")
     def _read_image(self, image_path):
         if "Image" in self._viewer.layers:
             self._viewer.layers.remove("Image")
@@ -102,10 +102,8 @@ class IoContainer(widgets.Container):
             idx = self._viewer.layers.index("Label")
             self._viewer.layers.move(idx, -1)
 
-    @use_case_check_point
+    @use_case_check_point("Label")
     def _read_label(self, label_path):
-        if self._autocrop:
-            self._crop_image()
         if "Label" in self._viewer.layers:
             self._viewer.layers.remove("Label")
         labels = self._viewer.open(
@@ -162,6 +160,7 @@ class IoContainer(widgets.Container):
             ## TODO : uncomment to get the image at the right resolution
             self._viewer.layers["Image"].translate = new_origin
 
+    @use_case_check_point("Image")
     def _handle_layers_from_other_readers(self, event):
         # the newly inserted layer is the last one in the layer list
         layer = event.source[-1]
@@ -176,7 +175,7 @@ class IoContainer(widgets.Container):
                 self._viewer.layers.remove("Image")
             layer.name = "Image"
 
-            if "Label" in self._viewer.layers:
+            if self._autocrop and "Label" in self._viewer.layers:
                 self._crop_image()
 
             # any new Image layer is moved first (below all the other layers)
@@ -203,12 +202,12 @@ class PointContainer(widgets.Container):
 
         self.extend(
             [
-                widgets.Label(label="Point cloud selection"),
+                widgets.Label(label="Endpoint selection"),
                 selection_container,
             ]
         )
 
-    @use_case_check_point
+    @use_case_check_point("Goal")
     def _select_source(self):
         if "Goal" in self._viewer.layers:
             self._viewer.layers.remove("Goal")
@@ -225,7 +224,7 @@ class PointContainer(widgets.Container):
         self._viewer.layers.selection = [self._goal_layer]
         self._goal_layer.mode = "add"
 
-    @use_case_check_point
+    @use_case_check_point("Initial positions")
     def _select_positions(self):
         if "Initial positions" not in self._viewer.layers:
             self._position_layer = self._viewer.add_points(
@@ -1586,20 +1585,21 @@ class DefaultUseCase(UseCase):
     def __init__(self, InitFieldContainer: type):
         super().__init__()
         # Reminder: self._requirements[downstream] = upstream
+        # Upstream requirements can be methods or layers
         self._requirements[PointContainer] = [
-            IoContainer._read_image,
-            IoContainer._read_label,
+            "Image",
+            "Label",
         ]
         self._requirements[InitFieldContainer] = [
-            PointContainer._select_source
+            "Goal",
         ]
         self._requirements[SimulationContainer] = [
-            PointContainer._select_positions,
+            "Initial positions",
             InitFieldContainer.compute,
         ]
         if InitFieldContainer is AStarContainer:
             self._requirements[InitFieldContainer].append(
-                PointContainer._select_positions
+                "Initial positions",
             )
 
     def _disable(self, container: widgets.Container):
@@ -1607,17 +1607,3 @@ class DefaultUseCase(UseCase):
 
     def _enable(self, container: widgets.Container):
         container.enabled = True
-
-    def _ready(self, container, method, returned_value):
-        if method is IoContainer._read_image:
-            return "Image" in container._viewer.layers
-        elif method is IoContainer._read_label:
-            return "Label" in container._viewer.layers
-        elif method is PointContainer._select_source:
-            return "Goal" in container._viewer.layers
-        elif method is PointContainer._select_positions:
-            return "Initial positions" in container._viewer.layers
-        elif isinstance(returned_value, bool):
-            return returned_value
-        else:
-            return True
