@@ -167,20 +167,23 @@ class UseCase:
                 self.disable(step)
 
 
-def use_case_check_point(f_or_layer):
+def use_case_check_point(f_or_layers):
     """
     Decorator for methods that may fulfill use case requirements.
     """
 
-    if isinstance(f_or_layer, str):
-        layer = f_or_layer
+    if isinstance(f_or_layers, (str, list, tuple)):
+        layers = f_or_layers
+        if isinstance(layers, str):
+            layers = [layers]
 
         def decorator(f):
 
             @wraps(f)
             def method_with_check_point(self, *args, **kwargs):
                 ret = f(self, *args, **kwargs)
-                self._use_case.notify_layer_update(self, layer, ret)
+                for layer in layers:
+                    self._use_case.notify_layer_update(self, layer, ret)
                 return ret
 
             return method_with_check_point
@@ -188,7 +191,7 @@ def use_case_check_point(f_or_layer):
         return decorator
 
     else:
-        f = f_or_layer
+        f = f_or_layers
 
         @wraps(f)
         def method_with_check_point(self, *args, **kwargs):

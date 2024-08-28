@@ -160,7 +160,7 @@ class IoContainer(widgets.Container):
             ## TODO : uncomment to get the image at the right resolution
             self._viewer.layers["Image"].translate = new_origin
 
-    @use_case_check_point("Image")
+    @use_case_check_point(["Image", "Label"])
     def _handle_layers_from_other_readers(self, event):
         # the newly inserted layer is the last one in the layer list
         layer = event.source[-1]
