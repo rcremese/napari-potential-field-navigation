@@ -66,7 +66,7 @@ Label files can only be loaded using the “Label path” widget.
 
 Once both an image file and a label file are loaded, the image is automatically cropped.
 
-> **_NOTE:_** If files have already been loaded, close and restart the app prior to loading new files.
+> **_NOTE:_**  If files have already been loaded, close and restart the app prior to loading new files.
 
 ### Trajectory endpoint selection
 
@@ -107,6 +107,8 @@ Note that, as an pre-optimization step, the parameters should adjusted so that s
 Once generated, the trajectories are shown in a dedicated [napari] layer. Hide some of the other layers to improve readability.
 
 To animate the trajectories, a slider appears at the bottom, with a play/pause button on the left of the slider. In the 2D mode, two sliders are shown, one to navigate the image slices, the other one to represent time.
+
+> **_NOTE:_**  Optimized trajectories usually get trapped at the goal and look like they disappear as they reach the goal.
 
 ### Vector field optimization
 
