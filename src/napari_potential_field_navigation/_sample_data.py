@@ -6,6 +6,7 @@ see: https://napari.org/stable/plugins/guides.html?#sample-data
 
 Replace code below according to your needs.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,8 +28,20 @@ def open_samples():
     labels_metadata = temp_layers[0][1]
     labels_metadata.pop("channel_axis", None)
     labels_metadata.pop("rgb", None)
+
+    # Automatic cropping based on label values
+    nonzero = numpy.where(labels != 0)
+    min_xyz = (nonzero[0].min(), nonzero[1].min(), nonzero[2].min())
+    max_xyz = (nonzero[0].max(), nonzero[1].max(), nonzero[2].max())
+    crop_slice = tuple(
+        slice(min, max + 1) for min, max in zip(min_xyz, max_xyz)
+    )
+    cropped_image = image_layers[0][0][crop_slice]
+    cropped_labels = labels[crop_slice]
+
     labels_metadata["name"] = "Label"
     labels_metadata["blending"] = "translucent_no_depth"
-    label_layers = [(labels, labels_metadata, "labels")]
+    label_layers = [(cropped_labels, labels_metadata, "labels")]
+    image_layers[0] = (cropped_image, image_layers[0][1])
     image_layers.extend(label_layers)
     return image_layers
