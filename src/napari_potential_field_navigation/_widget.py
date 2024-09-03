@@ -13,6 +13,7 @@ from napari.qt.threading import thread_worker
 import taichi as ti
 import taichi.math as tm
 import scipy.sparse.linalg as splinalg
+from scipy.stats import gaussian_kde
 import pandas as pd
 
 from napari_potential_field_navigation.fields import (
@@ -1065,6 +1066,13 @@ class SimulationContainer(widgets.Container):
             tooltip="Export the trajectories in image coordinate in a csv file",
         )
         self._exporter.changed.connect(self._export_trajectories)
+        ## Export the losses in csv
+        self._loss_exporter = widgets.FileEdit(
+            label="Export loss",
+            mode="w",
+            tooltip="Losses for the current optimization in a csv file",
+        )
+        self._loss_exporter.changed.connect(self._export_loss)
         # Export all the generated datas
         self._save_all_button = widgets.FileEdit(
             label="Save all (.npz)",
@@ -1075,6 +1083,7 @@ class SimulationContainer(widgets.Container):
         save_container = widgets.Container(
             widgets=[
                 self._exporter,
+                self._loss_exporter,
                 self._save_all_button,
             ],
             layout="horizontal",
@@ -1093,6 +1102,7 @@ class SimulationContainer(widgets.Container):
         )
 
         self.simulation = None
+        self.losses = None
         self._optimized_vector_field = None
 
     def _run_simulation(self) -> bool:
@@ -1103,22 +1113,6 @@ class SimulationContainer(widgets.Container):
                 "The simulation could not be initialized."
             )
             return False
-        # if not self._initialize_simulation():
-        #     notifications.show_error(
-        #         "The simulation could not be initialized."
-        #     )
-        #     return False
-
-        # initial_positions = np.repeat(
-        #     self._viewer.layers["Initial positions"].data,
-        #     self._agent_count.value,
-        #     axis=0,
-        # )
-
-        # self.simulation.update_positions(initial_positions)
-        # self.simulation.update_time(
-        #     self._time_slider.value, self._timestep_slider.value
-        # )
 
         # self.simulation.diffusivity = self._diffusivity_slider.value
         self.simulation.reset()
@@ -1182,10 +1176,6 @@ class SimulationContainer(widgets.Container):
         filepath = self._exporter.value.with_suffix(".csv")
         export_trajectories.to_csv(filepath, index=False)
 
-        # trajectories[["z", "y", "x"]] = (
-        #     trajectories[["x", "y", "z"]] - label_layer.metadata["origin"]
-        # ) / label_layer.metadata["spacing"]
-        # trajectories.to_csv(self._exporter.value, index=False)
         if self.nb_agents == 1:
             return True
         ## Export the mean trajectories
@@ -1203,28 +1193,19 @@ class SimulationContainer(widgets.Container):
         filepath = self._exporter.value.with_suffix(".csv")
         filepath = filepath.with_stem(filepath.stem + "_mean")
         export_trajectories.to_csv(filepath, index=False)
+        return True
 
-        # mean_trajectories[["z", "y", "x"]] = (
-        #     mean_trajectories[["x", "y", "z"]] - label_layer.metadata["origin"]
-        # ) / label_layer.metadata["spacing"]
-        # # self._exporter.value
-        # filepath = self._exporter.value
-        # mean_trajectories.to_csv(
-        #     filepath.with_stem(filepath.stem + "_mean"), index=False
-        # )
-        # traj_ids = np.array(trajectories[:, 0], dtype=int)
-        # frame_ind = np.array(trajectories[:, 1], dtype=int)
-        # positions = (
-        #     np.array(trajectories[:, 2:]) - label_layer.metadata["origin"]
-        # ) / label_layer.metadata["spacing"]
+    def _export_loss(self):
+        if self.losses is None:
+            notifications.show_error("No losses found.")
+            return False
+        if self._loss_exporter.value == "":
+            notifications.show_error("No filename provided.")
+            return False
 
-        # with open(self._exporter.value, "w", newline="") as csvfile:
-        #     writer = csv.writer(csvfile)
-        #     writer.writerow(
-        #         ["trajectory id", "frame index", "x", "y", "z"]
-        #     )  # adjust this to match your data structure
-        #     for traj, frame, pos in zip(traj_ids, frame_ind, positions):
-        #         writer.writerow([traj, frame, pos[2], pos[1], pos[0]])
+        losses = pd.DataFrame(self.losses)
+        filepath = self._loss_exporter.value.with_suffix(".csv")
+        losses.to_csv(filepath, index=False)
         return True
 
     def _initialize_simulation(self) -> bool:
@@ -1316,6 +1297,12 @@ class SimulationContainer(widgets.Container):
         collision_length = self._collision_lenght.value
 
         best_loss = np.inf
+        self.losses = {
+            "total": [],
+            "distance": [],
+            "bending": [],
+            "obstacle": [],
+        }
         best_vector_field = self.simulation.vector_field
 
         for i in range(max_iter):
@@ -1339,6 +1326,11 @@ class SimulationContainer(widgets.Container):
                     bend_weight=bend_weight,
                     obstacle_weight=obstacle_weight,
                 )
+            self.losses["distance"].append(self.simulation.distance_loss[None])
+            self.losses["bending"].append(self.simulation.bend_loss[None])
+            self.losses["obstacle"].append(self.simulation.obstacle_loss[None])
+            self.losses["total"].append(self.simulation.loss[None])
+
             print(
                 f"Iter={i}, Loss={self.simulation.loss[None]}",
                 f"\nDistance={self.simulation.distance_loss[None]/self.simulation.nb_walkers} Bending={self.simulation.bend_loss[None]} Obstacle={self.simulation.obstacle_loss[None]}",
@@ -1425,6 +1417,7 @@ class SimulationContainer(widgets.Container):
             ),
             spacing=label_layer.scale,
             origin=label_layer.translate,
+            **self.losses,
         )
         notifications.show_info(f"Data saved at {path}")
         return True
