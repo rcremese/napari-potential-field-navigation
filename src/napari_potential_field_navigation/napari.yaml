@@ -6,42 +6,22 @@ visibility: public
 categories: ["Annotation", "Segmentation", "Acquisition"]
 contributions:
   commands:
-    - id: napari-potential-field-navigation.open_samples
-      python_name: napari_potential_field_navigation._sample_data:open_samples
-      title: Open image and label samples for the Diff APF plugin
-    - id: napari-potential-field-navigation.get_reader
-      python_name: napari_potential_field_navigation._reader:napari_get_reader
-      title: Open data with Differentiable Potential Field Navigation
-    - id: napari-potential-field-navigation.write_multiple
-      python_name: napari_potential_field_navigation._writer:write_multiple
-      title: Save multi-layer data with Differentiable Potential Field Navigation
-    - id: napari-potential-field-navigation.write_single_image
-      python_name: napari_potential_field_navigation._writer:write_single_image
-      title: Save image data with Differentiable Potential Field Navigation
-    - id: napari-potential-field-navigation.make_sample_data
-      python_name: napari_potential_field_navigation._sample_data:make_sample_data
-      title: Load sample data from Differentiable Potential Field Navigation
+    - id: napari-potential-field-navigation.lung_sample
+      python_name: napari_potential_field_navigation._sample_data:lung_sample
+      title: Open image and label of a lung sample for the Diff APF plugin
+    - id: napari-potential-field-navigation.liver_sample
+      python_name: napari_potential_field_navigation._sample_data:liver_sample
+      title: Open image and label of a liver sample for the Diff APF plugin
     - id: napari-potential-field-navigation.make_diff_apf_widget
       python_name: napari_potential_field_navigation:DiffApfWidget
       title: Navigate in medical images using differentiable potential fields
-  readers:
-    - command: napari-potential-field-navigation.get_reader
-      accepts_directories: false
-      filename_patterns: ['*.npy']
-  writers:
-    - command: napari-potential-field-navigation.write_multiple
-      layer_types: ['image*','labels*']
-      filename_extensions: []
-    - command: napari-potential-field-navigation.write_single_image
-      layer_types: ['image']
-      filename_extensions: ['.npy']
   sample_data:
-    - command: napari-potential-field-navigation.make_sample_data
-      display_name: Differentiable Potential Field Navigation
-      key: unique_id.1
-    - command: napari-potential-field-navigation.open_samples
-      display_name: Image / Label Samples
-      key: unique_id.2
+    - command: napari-potential-field-navigation.lung_sample
+      display_name: Lung sample
+      key: lung_sample
+    - command: napari-potential-field-navigation.liver_sample
+      display_name: Liver sample
+      key: liver_sample
   widgets:
     - command: napari-potential-field-navigation.make_diff_apf_widget
       display_name: Diff APF

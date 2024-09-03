@@ -199,13 +199,6 @@ class FreeNavigationSimulation(NavigationSimulation):
         for i in range(max_iter):
             self._optimization_step(clip_value, lr)
             print("Iter=", i, "Loss=", self.loss[None])
-            # self.reset()
-            # with ti.ad.Tape(self.loss):
-            #     self.run()
-            #     self.compute_loss(self._nb_steps - 1)
-            # self._update_force_field(lr)
-            # if clip_value > 0.0:
-            #     self.vector_field.norm_clip(clip_value)
 
     def _optimization_step(self, clip_value: float, lr: float):
         self.reset()
@@ -470,7 +463,9 @@ class DomainNavigationSimulation(FreeNavigationSimulation):
                 ti.atomic_add(
                     self.obstacle_loss[None],
                     angle**2
-                    * tm.exp(-0.5 * obstacle_dist**2 / collision_length**2),
+                    * tm.exp(
+                        -0.5 * obstacle_dist**2 / collision_length**2
+                    ),
                 )
                 # if tm.length(f2) == 0.0 or tm.length(f1) == 0.0:
                 #     ti.atomic_add(self.obstacle_loss[None], 0.0)

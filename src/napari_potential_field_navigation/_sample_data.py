@@ -15,15 +15,39 @@ import numpy
 from napari_itk_io._reader import reader_function
 
 
-def open_samples():
-    """Open image and label samples"""
+def lung_sample():
     dirpath = (
-        Path(__file__).parents[2].joinpath("sample_datas").resolve(strict=True)
+        Path(__file__)
+        .parents[2]
+        .joinpath("sample_datas", "Lung")
+        .resolve(strict=True)
     )
-    image_layers = reader_function(dirpath.joinpath("image.nii.gz"))
+    return open_samples(
+        dirpath.joinpath("image.nii.gz"), dirpath.joinpath("label.nii.gz")
+    )
+
+
+def liver_sample():
+    dirpath = (
+        Path(__file__)
+        .parents[2]
+        .joinpath("sample_datas", "Liver")
+        .resolve(strict=True)
+    )
+    return open_samples(
+        dirpath.joinpath("image.nii.gz"), dirpath.joinpath("label.nii.gz")
+    )
+
+
+def open_samples(image_path: Path, label_path: Path):
+    """Open image and label samples"""
+    assert image_path.exists(), f"File not found: {image_path}"
+    assert label_path.exists(), f"File not found: {label_path}"
+
+    image_layers = reader_function(image_path)
     image_layers[0][1]["name"] = "Image"
 
-    temp_layers = reader_function(dirpath.joinpath("label.nii.gz"))
+    temp_layers = reader_function(label_path)
     labels = temp_layers[0][0].astype(int)
     labels_metadata = temp_layers[0][1]
     labels_metadata.pop("channel_axis", None)
