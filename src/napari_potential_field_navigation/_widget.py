@@ -5,6 +5,7 @@ import logging
 
 from abc import ABC, abstractmethod
 import magicgui.widgets as widgets
+import napari.layers
 import napari.utils.notifications as notifications
 import numpy as np
 import scipy.ndimage as ndi
@@ -55,7 +56,7 @@ class IoContainer(widgets.Container):
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
         super().__init__()
-        self._viewer = viewer
+        self._viewer: napari.Viewer = viewer
         # Image
         self._image_reader = widgets.FileEdit(label="Image path")
         self._image_reader.changed.connect(self._read_image)
@@ -262,7 +263,7 @@ class PointContainer(widgets.Container):
 class InitFieldContainer(widgets.Container, ABC):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__()
-        self._viewer = viewer
+        self._viewer: napari.Viewer = viewer
         self._compute_button = widgets.PushButton(
             text=f"Compute {self.method_name} field"
         )
@@ -286,11 +287,25 @@ class InitFieldContainer(widgets.Container, ABC):
             layout="horizontal",
         )
         self._plot_vectors_check.changed.connect(self.visualize)
+        ## Add the label domain selector
+        self._label_domain_selector = widgets.SpinBox(
+            description="Domain selection",
+            min=0,
+            max=10,
+            value=1,
+            step=1,
+            tooltip="Select the domain in which to compute the field based on the label values",
+        )
+        self._label_domain_selector.changed.connect(
+            self._on_label_domain_change
+        )
+
         self.extend(
             [
                 widgets.Label(label=f"{self.method_name} field computation"),
                 load_and_save_container,
                 compute_container,
+                self._label_domain_selector,
             ]
         )
 
@@ -319,6 +334,21 @@ class InitFieldContainer(widgets.Container, ABC):
                 field=self._field.data,
                 mask=self._field.mask,
             )
+        return True
+
+    def _on_label_domain_change(self) -> bool:
+        assert "Label" in self._viewer.layers, "No label found"
+        if (
+            self._label_domain_selector.value
+            not in self._viewer.layers["Label"].data
+        ):
+            notifications.show_error(
+                f"The selected label is not in the label map. Choose one of {np.unique(self._viewer.layers['Label'].data)}"
+            )
+            return False
+        label_layer: napari.layers.Labels = self._viewer.layers["Label"]
+        label_layer.selected_label = self._label_domain_selector.value
+        label_layer.show_selected_label = True
         return True
 
     def visualize(self, plot_vectors=False) -> bool:
@@ -475,6 +505,7 @@ class WavefrontContainer(InitFieldContainer):
         return "Wavefront"
 
 
+# TODO : integrate domain selection in the AStar computation
 class AStarContainer(InitFieldContainer):
     @use_case_check_point
     def compute(self) -> bool:
@@ -491,6 +522,14 @@ class AStarContainer(InitFieldContainer):
         if "Initial positions" not in self._viewer.layers:
             notifications.show_error(
                 "No initial positions found. Please select initial positions before computing the wavefront."
+            )
+            return False
+        if (
+            self._label_domain_selector.value
+            not in self._viewer.layers["Label"].data
+        ):
+            notifications.show_error(
+                f"The selected label is not in the label map. Choose one of {np.unique(self._viewer.layers['Label'].data)}"
             )
             return False
         assert (
@@ -516,7 +555,6 @@ class AStarContainer(InitFieldContainer):
                 "The goal and initial positions must be in the free space."
             )
             return False
-
         path = astar(label_layer.data.astype(bool), init_pos_idx, goal_idx)
         if path is False:
             notifications.show_error("The A* algorithm failed.")
@@ -619,19 +657,28 @@ class LaplaceContainer(InitFieldContainer):
                 "No goal found. Please select a goal before computing the APF."
             )
             return False
+        if (
+            self._label_domain_selector.value
+            not in self._viewer.layers["Label"].data
+        ):
+            notifications.show_error(
+                f"The selected label is not in the label map. Choose one of {np.unique(self._viewer.layers['Label'].data)}"
+            )
+            return False
 
         if "Laplace" in self._viewer.layers:
             self._viewer.layers.remove("APF")
         ## Start the computation
         self._compute_button.text = "Computing Laplace field..."
         ## Construct a dilated label map for PDE solve
-        dilated_label = ndi.binary_dilation(
-            label_layer.data, structure=np.ones((3, 3, 3))
+        domain = label_layer.data == self._label_domain_selector.value
+        dilated_domain = ndi.binary_dilation(
+            domain, structure=np.ones((3, 3, 3))
         )
         ## First define the field as a masked array
         self._field = np.ma.array(
-            np.zeros_like(dilated_label),
-            mask=~dilated_label,
+            np.zeros_like(dilated_domain),
+            mask=~dilated_domain,
             fill_value=-np.inf,
             dtype=np.float32,
         )
@@ -641,7 +688,7 @@ class LaplaceContainer(InitFieldContainer):
         goal_position = tuple([round(idx) for idx in goal_position])
         # Select the index of the goal position
         # goal_index = sub2ind_3D(label_layer.data.shape, *goal_position)
-        boundary_condition = np.zeros_like(dilated_label)
+        boundary_condition = np.zeros_like(dilated_domain)
         boundary_condition[goal_position] = 1
         ## Create the laplacian matrix
         laplace_mat, rhs = create_poisson_system(
@@ -649,7 +696,7 @@ class LaplaceContainer(InitFieldContainer):
         )
         ## Solve the system on a subset of the map
         logging.info("Start solving the poisson equation")
-        valid_indices = dilated_label.flat != 0
+        valid_indices = dilated_domain.flat != 0
         A = laplace_mat[valid_indices, :][:, valid_indices]
         b = rhs[valid_indices]
         x = splinalg.spsolve(A, b)
@@ -698,6 +745,7 @@ class LaplaceContainer(InitFieldContainer):
         return SimpleVectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
 
 
+# TODO : integrate domain selection in the APF computation
 class ApfContainer(InitFieldContainer):
     def __init__(self, viewer: "napari.viewer.Viewer"):
         super().__init__(viewer)
@@ -889,6 +937,7 @@ class ApfContainer(InitFieldContainer):
         # return VectorField3D(-np.stack([dx, dy, dz], axis=-1), bounds)
 
 
+# TODO : integrate domain selection in the simulation
 class SimulationContainer(widgets.Container):
     def __init__(
         self,
