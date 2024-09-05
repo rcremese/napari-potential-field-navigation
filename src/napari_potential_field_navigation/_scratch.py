@@ -43,17 +43,17 @@ class TestCreateTrajectories:
         )
 
     def test_create_trajectories(self):
-        mean_traj = self.mean_trajectories()
-        assert isinstance(mean_traj, pd.DataFrame)
-        assert mean_traj.shape[0] == self.t_max * self.nb_sources
-        assert mean_traj.columns.tolist() == [
-            "id",
-            "time",
-            "x",
-            "y",
-            "z",
-        ]
-
+        # mean_traj = self.mean_trajectories()
+        # assert isinstance(mean_traj, pd.DataFrame)
+        # assert mean_traj.shape[0] == self.t_max * self.nb_sources
+        # assert mean_traj.columns.tolist() == [
+        #     "id",
+        #     "time",
+        #     "x",
+        #     "y",
+        #     "z",
+        # ]
+        log_density = self.estimate_log_density(sigma=1e-2)
         viewer = napari.Viewer()
         viewer.add_tracks(
             self.trajectories[["id", "time", "x", "y", "z"]],
@@ -64,47 +64,35 @@ class TestCreateTrajectories:
                 1: "green",
             },
         )
-        viewer.add_tracks(
-            mean_traj[["id", "time", "x", "y", "z"]],
-            properties=mean_traj["id"],
-            color_by="id",
-            colormaps_dict={
-                0: "red",
-                1: "green",
-            },
+        viewer.add_image(
+            log_density,
+            colormap="inferno",
+            translate=self.trajectories[["x", "y", "z"]].min().values,
         )
+        # viewer.add_tracks(
+        #     mean_traj[["id", "time", "x", "y", "z"]],
+        #     properties=mean_traj["id"],
+        #     color_by="id",
+        #     colormaps_dict={
+        #         0: "red",
+        #         1: "green",
+        #     },
+        # )
         napari.run()
 
-        # fig = plt.figure()
-        # ax = fig.add_subplot(111, projection="3d")
-
-        # for source in range(self.nb_sources):
-        #     traj_data = self.trajectories[
-        #         self.trajectories["source"] == source
-        #     ][["x", "y", "z"]].values
-        #     ax.plot(
-        #         traj_data[:, 0],
-        #         traj_data[:, 1],
-        #         traj_data[:, 2],
-        #         label=f"Source {source}",
-        #     )
-
-        #     mean_traj_source = mean_traj[mean_traj["id"] == source][
-        #         ["x", "y", "z"]
-        #     ].values
-        #     ax.plot(
-        #         mean_traj_source[:, 0],
-        #         mean_traj_source[:, 1],
-        #         mean_traj_source[:, 2],
-        #         label=f"Mean Source {source}",
-        #         linestyle="--",
-        #     )
-
-        # ax.set_xlabel("X")
-        # ax.set_ylabel("Y")
-        # ax.set_zlabel("Z")
-        # ax.legend()
-        # plt.show()
+    def estimate_log_density(self, sigma: float = 0.1) -> KernelDensity:
+        kde = KernelDensity(kernel="gaussian", bandwidth=sigma)
+        kde.fit(self.trajectories[["x", "y", "z"]].values)
+        pos_min = self.trajectories[["x", "y", "z"]].min()
+        pos_max = self.trajectories[["x", "y", "z"]].max()
+        X, Y, Z = np.mgrid[
+            pos_min["x"] : pos_max["x"] : 100j,
+            pos_min["y"] : pos_max["y"] : 100j,
+            pos_min["z"] : pos_max["z"] : 100j,
+        ]
+        positions = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
+        density = kde.score_samples(positions)
+        return density.reshape(X.shape)
 
     def mean_trajectories(self):
         mean_traj = pd.DataFrame(columns=["id", "time", "x", "y", "z"])
