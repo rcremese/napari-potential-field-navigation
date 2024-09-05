@@ -739,10 +739,12 @@ class LaplaceContainer(InitFieldContainer):
         bounds = Box3D(starting, ending)
 
         dx, dy, dz = np.gradient(self.field, *spacing, edge_order=2)
-        dx[dx.mask] = 0
-        dy[dy.mask] = 0
-        dz[dz.mask] = 0
-        return SimpleVectorField3D(np.stack([dx, dy, dz], axis=-1), bounds)
+        valid_grad = dx.mask | dy.mask | dz.mask
+        dx[valid_grad] = 0
+        dy[valid_grad] = 0
+        dz[valid_grad] = 0
+        grad = np.stack([dx, dy, dz], axis=-1)
+        return SimpleVectorField3D(grad.data, bounds)
 
 
 # TODO : integrate domain selection in the APF computation
@@ -972,7 +974,7 @@ class SimulationContainer(widgets.Container):
             min=0,
             max=10,
             value=0,
-            step=0.01,
+            step=1e-3,
             label="Agent diffusivity (cm^2/s)",
         )
         ## Button to start the simulation
@@ -1020,12 +1022,13 @@ class SimulationContainer(widgets.Container):
             label="Epochs", min=1, max=1000, step=10, value=10
         )
         self._lr_slider = widgets.FloatSpinBox(
-            min=0.001, max=10, value=0.1, label="Learning rate"
+            min=1e-4, max=10, value=0.1, step=1e-4, label="Learning rate"
         )
         self._clip_value_slider = widgets.FloatSpinBox(
             min=0,
             max=100,
             value=0,
+            step=1e-2,
             label="Clip value",
             tooltip="Gradient clipping value",
         )
@@ -1048,12 +1051,14 @@ class SimulationContainer(widgets.Container):
             label="Diffusion max",
             min=0,
             max=10,
+            step=1e-3,
             value=0,
         )
         self._diffusion_min = widgets.FloatSpinBox(
             label="Diffusion min",
             min=0,
             max=10,
+            step=1e-3,
             value=0,
         )
         diffusion_container = widgets.Container(
@@ -1075,21 +1080,21 @@ class SimulationContainer(widgets.Container):
         self._obstacle_distance = widgets.FloatSpinBox(
             label="Obstacle weight",
             min=0,
-            max=100,
+            max=10_000,
             value=1.0,
             tooltip="Weight of the obstacle distance in the loss function exp(-||x_i - x_obs||^2)",
         )
         self._bending_constraint = widgets.FloatSpinBox(
             label="Bending weight",
             min=0,
-            max=100,
+            max=10_000,
             value=1.0,
             tooltip="Weight of the bending constraint in the loss function <F(x_{i+1}), F(x_i)>",
         )
         self._collision_lenght = widgets.FloatSpinBox(
             label="Collision length",
             min=0.1,
-            max=100,
+            max=10_000,
             value=1.0,
             tooltip="Length of the obstacle collision constraint",
         )
@@ -1505,6 +1510,7 @@ class SimulationContainer(widgets.Container):
             scale=self._viewer.layers["Label"].scale,
             translate=self._viewer.layers["Label"].translate,
             metadata=self._viewer.layers["Label"].metadata,
+            visible=False,
         )
         return True
 
