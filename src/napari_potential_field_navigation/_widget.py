@@ -296,8 +296,16 @@ class InitFieldContainer(widgets.Container, ABC):
             step=1,
             tooltip="Select the domain in which to compute the field based on the label values",
         )
+        self._show_all_labels = widgets.CheckBox(
+            value=True, text="Show all labels"
+        )
+        self._show_all_labels.changed.connect(self._on_label_domain_change)
         self._label_domain_selector.changed.connect(
             self._on_label_domain_change
+        )
+        label_container = widgets.Container(
+            widgets=[self._label_domain_selector, self._show_all_labels],
+            layout="horizontal",
         )
 
         self.extend(
@@ -305,7 +313,7 @@ class InitFieldContainer(widgets.Container, ABC):
                 widgets.Label(label=f"{self.method_name} field computation"),
                 load_and_save_container,
                 compute_container,
-                self._label_domain_selector,
+                label_container,
             ]
         )
 
@@ -347,8 +355,11 @@ class InitFieldContainer(widgets.Container, ABC):
             )
             return False
         label_layer: napari.layers.Labels = self._viewer.layers["Label"]
+        if self._label_domain_selector.value == 0:
+            label_layer.visible = self._show_all_labels.value
+            return True
         label_layer.selected_label = self._label_domain_selector.value
-        label_layer.show_selected_label = True
+        label_layer.show_selected_label = not self._show_all_labels.value
         return True
 
     def visualize(self, plot_vectors=False) -> bool:
@@ -1180,10 +1191,7 @@ class SimulationContainer(widgets.Container):
             return False
         if name.capitalize() in self._viewer.layers:
             self._viewer.layers.remove(name.capitalize())
-        # self._viewer.add_tracks(
-        #     self.simulation.trajectories,
-        #     name=name.capitalize(),
-        # )
+
         trajectories = self.trajectories
         self._viewer.add_tracks(
             trajectories[["trajectory id", "frame index", "x", "y", "z"]],
@@ -1191,7 +1199,6 @@ class SimulationContainer(widgets.Container):
             color_by="source",
             name=name.capitalize(),
         )
-        ## TODO : handle with care the case where there is only one agent
         if self.nb_agents == 1:
             return True
         ## Plot the mean trajectory
@@ -1284,11 +1291,21 @@ class SimulationContainer(widgets.Container):
             )
             return False
         label_layer = self._viewer.layers["Label"]
+        if (
+            self._field_container._label_domain_selector.value
+            not in label_layer.data
+        ):
+            notifications.show_error(
+                f"The selected label is not in the label map. Choose one of {np.unique(label_layer.data)}"
+            )
+            return False
+        domain = (
+            label_layer.data
+            == self._field_container._label_domain_selector.value
+        )
 
         distance_field = DistanceField(
-            ndi.distance_transform_edt(
-                label_layer.data, sampling=label_layer.scale
-            ),
+            ndi.distance_transform_edt(domain, sampling=label_layer.scale),
             vector_field.bounds,
         )
         if "Initial positions" not in self._viewer.layers:
@@ -1368,7 +1385,6 @@ class SimulationContainer(widgets.Container):
                     self.simulation.compute_distance_loss(
                         self.simulation.nb_steps - 1
                     )
-                ## TODO : uncomment when the bending loss is implemented in the simulation and don't send nan.
                 if bend_weight > 0.0:
                     self.simulation.compute_bend_loss(min_diff=1e-6)
                 if obstacle_weight > 0.0:
@@ -1603,19 +1619,6 @@ class DiffApfWidget(widgets.Container):
             ]
         )
         self.max_width = 700
-
-    # def _update_method(self, index: int):
-    # Change the visible widget in the stacked widget to the selected method
-    # self._stackedWidget.setCurrentIndex(index)
-
-    # if self._method_selection.value == MethodSelection.APF.value:
-    #     self._method_container = ApfContainer(self._viewer)
-    # elif self._method_selection.value == MethodSelection.WAVEFRONT.value:
-    #     self._method_container = WavefrontContainer(self._viewer)
-    # elif self._method_selection.value == MethodSelection.A_STAR.value:
-    #     self._method_container = AStarContainer(self._viewer)
-    # else:
-    #     raise ValueError("Unknown method selection")
 
     def extend(self, components):
         if hasattr(self, "_use_case"):
