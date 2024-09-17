@@ -14,7 +14,7 @@ from napari.qt.threading import thread_worker
 import taichi as ti
 import taichi.math as tm
 import scipy.sparse.linalg as splinalg
-from scipy.stats import gaussian_kde
+from sklearn.neighbors import KernelDensity
 import pandas as pd
 
 from napari_potential_field_navigation.fields import (
@@ -355,6 +355,7 @@ class InitFieldContainer(widgets.Container, ABC):
             )
             return False
         label_layer: napari.layers.Labels = self._viewer.layers["Label"]
+        label_layer.visible = True
         if self._label_domain_selector.value == 0:
             label_layer.visible = self._show_all_labels.value
             return True
@@ -1154,6 +1155,15 @@ class SimulationContainer(widgets.Container):
             layout="horizontal",
         )
 
+        self._density_button = widgets.PushButton(text="Estimate density")
+        self._density_button.changed.connect(self._compute_density)
+        self._bandwidth_slider = widgets.FloatSpinBox(
+            label="Bandwidth", min=0.1, max=1, value=0.1, step=1e-1
+        )
+        density_container = widgets.Container(
+            widgets=[self._density_button, self._bandwidth_slider],
+            layout="horizontal",
+        )
         self.extend(
             [
                 widgets.Label(label="Optimization parameters"),
@@ -1161,6 +1171,7 @@ class SimulationContainer(widgets.Container):
                 diffusion_container,
                 weights_container,
                 widgets.Container(widgets=[self._run_optimization_button]),
+                density_container,
                 widgets.Label(label="Save results"),
                 save_container,
             ]
@@ -1424,6 +1435,40 @@ class SimulationContainer(widgets.Container):
         ## Allow to use the optimized vector field for the simulation
         self._reset_button.enabled = True
         return True
+
+    def _compute_density(self):
+        assert self.simulation is not None, "No simulation found."
+        if "Density" in self._viewer.layers:
+            self._viewer.layers.remove("Density")
+        kde = KernelDensity(
+            kernel="gaussian", bandwidth=self._bandwidth_slider.value
+        )
+        kde.fit(self.trajectories[["x", "y", "z"]])
+        x, y, z = self.simulation.vector_field.meshgrid
+        valid_positions = (
+            self._viewer.layers["Label"].data
+            == self._field_container._label_domain_selector.value
+        )
+        positions = np.stack(
+            [
+                x[valid_positions],
+                y[valid_positions],
+                z[valid_positions],
+            ],
+            axis=1,
+        )
+        temp_density = np.exp(kde.score_samples(positions))
+        density = np.zeros_like(valid_positions, dtype=np.float32)
+        density[valid_positions] = temp_density
+
+        self._viewer.add_image(
+            density,
+            scale=self._viewer.layers["Label"].scale,
+            translate=self._viewer.layers["Label"].translate,
+            name="Density",
+            blending="additive",
+            colormap="inferno",
+        )
 
     def _save_all(self, path: Union[str, Path] = None) -> bool:
         if self._optimized_vector_field is None:
