@@ -129,6 +129,9 @@ class IoContainer(widgets.Container):
             self._viewer.layers.remove(label)
 
         self._viewer.layers["Label"].editable = False
+        self._viewer.layers["Label"].metadata["origin"] = self._viewer.layers[
+            "Label"
+        ].translate
 
         if self._autocrop and "Image" in self._viewer.layers:
             self._crop_image()
@@ -168,7 +171,7 @@ class IoContainer(widgets.Container):
         layer = event.source[-1]
         if (
             isinstance(layer, napari.layers.image.image.Image)
-            and layer.name not in ("Image", "Label_temp")
+            and layer.name not in ("Image", "Label_temp", "Density")
             and not layer.name.endswith(" field")
         ):
             # the layer has been added using the viewer or File menu, i.e.
@@ -1463,11 +1466,12 @@ class SimulationContainer(widgets.Container):
 
         self._viewer.add_image(
             density,
+            name="Density",
+            colormap="inferno",
+            blending="additive",
             scale=self._viewer.layers["Label"].scale,
             translate=self._viewer.layers["Label"].translate,
-            name="Density",
-            blending="additive",
-            colormap="inferno",
+            metadata=self._viewer.layers["Label"].metadata,
         )
 
     def _save_all(self, path: Union[str, Path] = None) -> bool:
