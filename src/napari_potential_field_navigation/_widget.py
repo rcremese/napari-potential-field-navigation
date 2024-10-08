@@ -1420,8 +1420,7 @@ class SimulationContainer(widgets.Container):
                 self.simulation.run()
                 if goal_weight > 0.0:
                     self.simulation.compute_distance_loss(
-                        # self.simulation.nb_steps - 1
-                        i / max_iter
+                        self.simulation.nb_steps - 1
                     )
                 if bend_weight > 0.0:
                     self.simulation.compute_bend_loss(min_diff=1e-6)

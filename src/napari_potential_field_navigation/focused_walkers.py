@@ -24,7 +24,7 @@ class FocusedWalkers(DomainNavigationSimulation):
         )
 
     @ti.kernel
-    def compute_distance_loss(self, maturity: float):
+    def compute_distance_loss(self, t_max: int):
         for n in range(self._nb_walkers):
             self.distance_loss[None] += (
                 self._min_normalized_squared_distance_to_target[n]
@@ -170,7 +170,7 @@ def local_scale_transform(volume):
     direction as well. It takes the distance between the first background
     elements in both directions as a measurement of the local available “room”.
 
-    This is used to automatically adjust the local diffusivity.
+    This is used to threshold the norm of the random displacements.
     """
     nearest = distance_transform_edt(
         volume,
