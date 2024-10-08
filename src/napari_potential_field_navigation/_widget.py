@@ -1647,12 +1647,12 @@ class SimulationContainer(widgets.Container):
         if self.simulation is None:
             notifications.show_error("No simulation found.")
             return None
-        sim_trajectories = self.simulation.mean_trajectory
-        trajectories = pd.DataFrame(
-            sim_trajectories,
+        mean_traj = self.simulation.mean_trajectory
+        mean_traj = pd.DataFrame(
+            mean_traj,
             columns=["trajectory id", "frame index", "x", "y", "z"],
         )
-        return trajectories
+        return mean_traj
 
     def empty_vector_field(self) -> VectorField3D:
         if "Label" not in self._viewer.layers:
