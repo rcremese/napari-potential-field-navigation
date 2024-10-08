@@ -36,7 +36,7 @@ class NavigationSimulation(ABC):
         super().__init__()
         self._init_pos: ti.Field = None
         self._positions: ti.Field = None
-        self._target: ti.Vector = None
+        self.target: ti.Vector = None
         self._noise: ti.Field = None
         self._nb_steps: int = None
         self._nb_walkers: int = None
@@ -97,7 +97,7 @@ class FreeNavigationSimulation(NavigationSimulation):
         ## Initialisation of the walkers positions
         self.update_positions(positions)
 
-        ## Initiailisation of the taget point
+        ## Initialisation of the target point
         if target.shape != (self._dim,):
             raise ValueError(
                 f"Expected target to be a {self._dim}D-array. Get {target.shape} array"

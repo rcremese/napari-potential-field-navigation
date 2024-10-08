@@ -217,7 +217,7 @@ class VectorField2D(SampledField2D):
         ## Dimension and values
         if values.ndim != 3 or values.shape[2] != 2:
             raise ValueError(
-                f"Expected sampled field to be 3D-array with first dimension of size 2. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
+                f"Expected sampled field to be 3D-array with last dimension of size 2. Get {values.ndim} dimensions and last dimension of size {values.shape[2]}"
             )
         self._values = ti.Vector.field(
             n=self.ndim,
@@ -371,7 +371,7 @@ class VectorField3D(SampledField3D):
         ## Dimension and values
         if values.ndim != 4 or values.shape[3] != 3:
             raise ValueError(
-                f"Expected sampled field to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[3]}"
+                f"Expected sampled field to be 4D-array with last dimension of size 3. Get {values.ndim} dimensions and last dimension of size {values.shape[3]}"
             )
         self._values = ti.Vector.field(
             n=self.ndim,
@@ -419,13 +419,13 @@ class SampledFieldFactory:
         if isinstance(bounds, Box2D):
             if values.ndim != 3 or values.shape[2] != 2:
                 raise ValueError(
-                    f"Expected values to be 3D-array with first dimension of size 2. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
+                    f"Expected values to be 3D-array with last dimension of size 2. Get {values.ndim} dimensions and last dimension of size {values.shape[2]}"
                 )
             return VectorField2D(values, bounds)
         elif isinstance(bounds, Box3D):
             if values.ndim != 4 or values.shape[3] != 3:
                 raise ValueError(
-                    f"Expected values to be 4D-array with first dimension of size 3. Get {values.ndim} dimensions and first dimension of size {values.shape[0]}"
+                    f"Expected values to be 4D-array with last dimension of size 3. Get {values.ndim} dimensions and last dimension of size {values.shape[3]}"
                 )
             return VectorField3D(values, bounds)
         else:
