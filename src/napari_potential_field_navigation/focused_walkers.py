@@ -136,7 +136,8 @@ class FocusedWalkers(DomainNavigationSimulation):
 def set_simulation_default_values_for_lung(container):
     container._time_slider.value = 2_000
     container._speed_slider.value = 1.
-    container._diffusivity_slider.value = 5.
+    container._diffusivity_slider.value = 5. # could equal diffusion_min, but
+    # diffusivity_slider == 2 just does not work well...
     container._agent_count.value = 2_000
     container._lr_slider.value = .5
     container._nb_epochs_box.value = 200 # without diffusion scaling
@@ -248,7 +249,7 @@ def mean_trajectory(
         d2 = squared_distance
     # positions' shape is (nb_walkers, nb_steps, space_dims)
     n, t, d = positions.shape
-    n_ = n // 10
+    n_ = max(n // 10, min(10, n)) # 10%, but at least 10 or n if n < 10
     best_trajectories = np.argsort(d2)[:n_]
     positions_ = positions[best_trajectories, 1:, :]
     t_ = t - 1
@@ -313,13 +314,17 @@ def mean_trajectory(
         if np.isinf(d2_t0):
             d2_t0 = d2_t # distance to target of the first path point
     ## add a last path point near the target, without the greedy indicator
-    if radius2 < d2_t:
+    if d2_t < radius2:
         d2 = -2 * np.inner(positions_, destination) + p2 + q2
         I = d2 <= radius2
         moving_average = np.mean(positions_[I, :], axis=0)
         path.append(moving_average)
     else:
         print('mean_trajectory: target not reached')
+    if len(path) < 2:
+        raise RuntimeError(
+            'mean_trajectory: failed to find trajectories that moved enough towards the target point'
+        )
     ### 2. resample the path over time ]0,t];
     # note we exclude 0 for a practical concern and
     time_progress = np.arange(0, t + 1, downsampling_step)[1:] / t
