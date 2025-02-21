@@ -33,8 +33,12 @@ from napari_potential_field_navigation._finite_difference import (
 
 from napari_potential_field_navigation.geometries import Box3D
 from napari_potential_field_navigation.simulations import (
-    FreeNavigationSimulation,
     DomainNavigationSimulation,
+)
+from napari_potential_field_navigation.focused_walkers import (
+    FocusedWalkers,
+    set_simulation_default_values_for_lung,
+    reset_simulation_default_values,
 )
 import csv
 
@@ -165,15 +169,18 @@ class IoContainer(widgets.Container):
             ## TODO : uncomment to get the image at the right resolution
             self._viewer.layers["Image"].translate = new_origin
 
+    @classmethod
+    def _is_misnamed_image_layer(cls, layer):
+        return (isinstance(layer, napari.layers.image.image.Image)
+            and layer.name not in ("Image", "Label_temp", "Density")
+            and not layer.name.endswith(" field")
+        )
+
     @use_case_check_point(["Image", "Label"])
     def _handle_layers_from_other_readers(self, event):
         # the newly inserted layer is the last one in the layer list
         layer = event.source[-1]
-        if (
-            isinstance(layer, napari.layers.image.image.Image)
-            and layer.name not in ("Image", "Label_temp", "Density")
-            and not layer.name.endswith(" field")
-        ):
+        if self._is_misnamed_image_layer(layer):
             # the layer has been added using the viewer or File menu, i.e.
             # by copy-paste, drag-n-drop, Ctrl+O or File > Open File(s)...
             if "Image" in self._viewer.layers:
@@ -246,7 +253,11 @@ class PointContainer(widgets.Container):
 
     def _on_add_point(self, layer, event):
         if layer.mode == "add" and layer.editable:
-            layer.add(event.position)
+            pos = event.position
+            if len(pos) == 4:
+                # time has been appended as first coordinate; remove it
+                pos = pos[1:]
+            layer.add(pos)
             layer.editable = False
             self._source_selection.text = "Edit goal"
 
@@ -966,7 +977,7 @@ class SimulationContainer(widgets.Container):
         self._field_container = field_container
         self._time_slider = widgets.FloatSpinBox(
             min=1,
-            max=10_000,
+            max=1_000_000_000,
             value=100,
             step=1,
             label="Simulation final time (s)",
@@ -980,28 +991,31 @@ class SimulationContainer(widgets.Container):
         )
         self._speed_slider = widgets.FloatSpinBox(
             min=0,
-            max=10,
+            max=1_000,
             value=0,
             step=0.1,
             label="Maximal speed (cm/s)",
         )
         self._diffusivity_slider = widgets.FloatSpinBox(
             min=0,
-            max=10,
+            max=1_000,
             value=0,
             step=1e-3,
             label="Agent diffusivity (cm^2/s)",
         )
         ## Button to start the simulation
         self._agent_count = widgets.SpinBox(
-            label="Number of agents", min=1, max=100, value=1
+            label="Number of agents", min=1, max=1_000_000, value=1
         )
         self._reset_button = widgets.ComboBox(
             label="Vector field init",
-            value="Reset",
-            choices=["Reset", "Keep best", "Keep lastest"],
+            value="None",
+            choices=["None", "Reset", "Keep best", "Keep lastest"],
         )
         self._reset_button.enabled = False
+        self._viewer.layers.events.inserted.connect(
+            self._update_reset_button_on_field_init
+        )
         ## Widget container
         simu_param_container = widgets.Container(
             widgets=[
@@ -1034,7 +1048,7 @@ class SimulationContainer(widgets.Container):
         ## Optimization widgets
         ## Classical optimization parameters
         self._nb_epochs_box = widgets.SpinBox(
-            label="Epochs", min=1, max=1000, step=10, value=10
+            label="Epochs", min=1, max=1_000_000, step=10, value=10
         )
         self._lr_slider = widgets.FloatSpinBox(
             min=1e-4, max=10, value=0.1, step=1e-4, label="Learning rate"
@@ -1184,6 +1198,9 @@ class SimulationContainer(widgets.Container):
         self.losses = None
         self._optimized_vector_field = None
 
+        if self._reset_button.value == "None":
+            set_simulation_default_values_for_lung(self)
+
     def _run_simulation(self) -> bool:
         # self._start_button.text = "Running simulation..."
         # self._start_button.enabled = False
@@ -1216,8 +1233,9 @@ class SimulationContainer(widgets.Container):
         if self.nb_agents == 1:
             return True
         ## Plot the mean trajectory
-        if f"Mean {name.lower()}" in self._viewer.layers:
-            self._viewer.layers.remove(f"Mean {name.lower()}")
+        layer_name = f"Mean {name.lower()}"
+        if layer_name in self._viewer.layers:
+            self._viewer.layers.remove(layer_name)
         self._viewer.add_tracks(
             self.mean_trajectories[
                 ["trajectory id", "frame index", "x", "y", "z"]
@@ -1225,7 +1243,9 @@ class SimulationContainer(widgets.Container):
             color_by="track_id",
             colormap="hsv",
             blending="translucent",
-            name=f"Mean {name.lower()}",
+            name=layer_name,
+            tail_width=20,
+            tail_length=self.simulation._nb_steps,
         )
         return True
 
@@ -1284,7 +1304,9 @@ class SimulationContainer(widgets.Container):
         return True
 
     def _initialize_simulation(self) -> bool:
-        if self._reset_button.value == "Reset":
+        if self._reset_button.value == "None":
+            vector_field = self.empty_vector_field()
+        elif self._reset_button.value == "Reset":
             vector_field = self._field_container.vector_field
             ## Normalize the vector field (because it's too slow otherwise)
             vector_field.normalize()
@@ -1341,11 +1363,12 @@ class SimulationContainer(widgets.Container):
         goal = self._viewer.layers["Goal"].data[0]
         assert goal.shape == (3,), "Goal position must be a 3D vector"
 
-        self.simulation = DomainNavigationSimulation(
+        self.simulation = FocusedWalkers(
             initial_positions,
             goal,
             vector_field,
             distance_field=distance_field,
+            domain=label_layer.data,
             t_max=self.tmax,
             dt=self.dt,
             diffusivity=self.diffusivity,
@@ -1624,18 +1647,49 @@ class SimulationContainer(widgets.Container):
         if self.simulation is None:
             notifications.show_error("No simulation found.")
             return None
-        if self.nb_agents == 1:
-            return self.trajectories
-
-        mean_traj = self.trajectories.groupby(["source", "frame index"]).mean()
-        mean_traj["trajectory id"] = np.repeat(
-            range(self.nb_sources), self.simulation.nb_steps
-        ).astype(int)
-        mean_traj["frame index"] = np.tile(
-            range(self.simulation.nb_steps), self.nb_sources
+        mean_traj = self.simulation.mean_trajectory
+        mean_traj = pd.DataFrame(
+            mean_traj,
+            columns=["trajectory id", "frame index", "x", "y", "z"],
         )
         return mean_traj
 
+    def empty_vector_field(self) -> VectorField3D:
+        if "Label" not in self._viewer.layers:
+            notifications.show_error(
+                "No labels found. Please select a label file before running the optimization."
+            )
+            return None
+        label_layer = self._viewer.layers["Label"]
+        starting = np.array(label_layer.translate)
+        spacing = np.array(label_layer.scale)
+        ending = starting + spacing * label_layer.data.shape
+        bounds = Box3D(starting, ending)
+
+        data = np.zeros((*label_layer.data.shape, 3), dtype=np.float32)
+        x, y, z = np.nonzero(label_layer.data)
+        for w in range(3):
+            data[x, y, z, w] = 1e-8 * np.random.randn(len(x))
+
+        return SimpleVectorField3D(data, bounds)
+
+    def _field_init_event(self, event):
+        layer = event.source[-1]
+        return (layer.name.endswith(" field")
+            and layer.name != "Optimized vector field"
+            and self._reset_button.value == "None"
+        )
+
+    def _update_reset_button_on_field_init(self, event):
+        # if _reset_button is "None" and initialization has just completed,
+        # change _reset_button's value to previous default "Reset", and thus
+        # preserve the original behavior.
+        if self._field_init_event(event):
+            self._reset_button.value = "Reset"
+            logging.info(
+                "Resetting simulation and optimization parameters to original defaults."
+            )
+            reset_simulation_default_values(self)
 
 class DiffApfWidget(widgets.Container):
     def __init__(self, viewer: "napari.viewer.Viewer"):
@@ -1695,7 +1749,7 @@ class DefaultUseCase(UseCase):
         ]
         self._requirements[SimulationContainer] = [
             "Initial positions",
-            InitFieldContainer.compute,
+            #InitFieldContainer.compute,
         ]
         if InitFieldContainer is AStarContainer:
             self._requirements[InitFieldContainer].append(
