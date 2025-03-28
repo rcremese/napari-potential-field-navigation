@@ -60,10 +60,6 @@ class NavigationSimulation(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def optimize(self, max_iter: int = 1000, lr: float = 1e-3):
-        raise NotImplementedError
-
-    @abstractmethod
     def update_time(self, t_max: float, dt: float):
         raise NotImplementedError
 
@@ -166,34 +162,6 @@ class FreeNavigationSimulation(NavigationSimulation):
     def run(self):
         for t in range(1, self._nb_steps):
             self.step(t)
-
-    def optimize(
-        self,
-        max_iter: int = 100,
-        lr: float = 1e-3,
-        clip_value: float = 0.0,
-    ):
-        assert (
-            isinstance(max_iter, int) and max_iter > 0
-        ), f"Expected max_iter to be a positive integer. Get {max_iter}"
-        assert (
-            isinstance(lr, (float, int)) and lr > 0.0
-        ), f"Expected lr to be a positive float. Get {lr}"
-        if clip_value > 0.0:
-            assert (
-                isinstance(clip_value, (float, int)) and clip_value > 0.0
-            ), f"Expected clip_value to be a positive float. Get {clip_value}"
-            clip_value = float(clip_value)
-
-        for iter in range(max_iter):
-            self.reset()
-            with ti.ad.Tape(self.loss):
-                self.run()
-                self.compute_loss(self._nb_steps - 1)
-            print("Iter=", iter, "Loss=", self.loss[None])
-            self._update_force_field(lr)
-            if clip_value > 0.0:
-                self.vector_field.norm_clip(clip_value)
 
     def reset(self):
         if self._dim == 2:

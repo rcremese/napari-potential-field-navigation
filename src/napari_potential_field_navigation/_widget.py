@@ -206,13 +206,13 @@ class ApfContainer(widgets.Container):
             choices=["1x", "2x", "4x", "8x", "16x"],
             value="1x",
         )
-        # self._attractive_weight_slider = widgets.FloatSlider(
-        #     min=1,
-        #     max=1000,
-        #     step=1,
-        #     value=1,
-        #     label="Attractive weight (unit)",
-        # )
+        self._attractive_weight_slider = widgets.FloatSlider(
+            min=1,
+            max=1000,
+            step=1,
+            value=1,
+            label="Attractive weight (unit)",
+        )
         # self._attractive_weight_slider.changed.connect(self._plot_apf)
         self._repulsive_weight_slider = widgets.FloatSlider(
             min=1,
@@ -230,7 +230,7 @@ class ApfContainer(widgets.Container):
                 widgets.Label(label="APF parameters"),
                 self._ratio_slider,
                 self._resolution_combobox,
-                # self._attractive_weight_slider,
+                self._attractive_weight_slider,
                 self._repulsive_weight_slider,
                 self._repulsive_radius_slider,
             ],
@@ -441,21 +441,6 @@ class SimulationContainer(widgets.Container):
         self._lr_slider = widgets.FloatSpinBox(
             min=0.001, max=10, value=0.1, label="Learning rate"
         )
-
-        self._run_optimization_button = widgets.PushButton(
-            text="Run optimization"
-        )
-        self._run_optimization_button.changed.connect(self._run_optimization)
-
-        self.extend(
-            [
-                widgets.Label(label="Optimization parameters"),
-                self._nb_epochs_box,
-                self._lr_slider,
-                self._run_optimization_button,
-            ]
-        )
-
         self.simulation = None
 
     def _run_simulation(self) -> bool:
@@ -483,23 +468,6 @@ class SimulationContainer(widgets.Container):
             name=name.capitalize(),
         )
         return True
-
-    # def _update_simulation(self) -> bool:
-    #     if self.simulation is None:
-    #         notifications.show_error(
-    #             "The simulation could is not initialized."
-    #         )
-    #         return False
-    #     initial_positions = np.repeat(
-    #         self._viewer.layers["Initial positions"].data,
-    #         self._agent_count.value,
-    #         axis=0,
-    #     )
-
-    #     self.simulation.diffusivity = self.diffusivity
-    #     self.simulation.update_positions(initial_positions)
-    #     self.simulation.update_time(self.tmax, self.dt)
-    #     return True
 
     def _initialize_simulation(self) -> bool:
         potential_field = self._apf_container.potential_field
@@ -545,18 +513,6 @@ class SimulationContainer(widgets.Container):
             dt=self.dt,
             diffusivity=self.diffusivity,
         )
-        return True
-
-    def _run_optimization(self):
-        if not self._initialize_simulation():
-            notifications.show_error(
-                "The simulation could not be initialized."
-            )
-            return False
-        self.simulation.optimize(
-            max_iter=self._nb_epochs_box.value, lr=self._lr_slider.value
-        )
-        self._plot_trajectories("Optimized trajectories")
         return True
 
     @property
@@ -634,9 +590,7 @@ class DiffApfWidget(widgets.Container):
         self._simulation_container = SimulationContainer(
             self._viewer, self._apf_container
         )
-        self._optimization_container = OptimizationContainer(
-            self._viewer, self._simulation_container
-        )
+
         self.extend(
             [
                 self._io_container,
